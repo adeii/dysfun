@@ -24,8 +24,12 @@ repo sync -f -jX (-f being for force and replace the X in -jX with the number of
 lunch (pick your devices number from the list)
 
 **Then fire it off with:**
+first make yourself an official Broken Rom builder, type:
+    export FUCK_XDA=true 
+then     
+    time make broken -jX 
 
-time make broken -jX (x being the amount of cores/threads your build box contains...Adjust accordingly, but going too high for your box can cause complications..Be warned)
+(x being the amount of cores/threads your build box contains...Adjust accordingly, but going too high for your box can cause complications..Be warned)
 
 **Alternatively you can use our custom build script that will handle everything for you when building official devices by using the format:**
 
