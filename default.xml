@@ -110,22 +110,15 @@
   <project path="developers/samples/android" name="platform/developers/samples/android" />
   <project path="development" name="SlimRoms/android_development" remote="github" revision="lp5.1" />
   <project path="device/common" name="device/common" groups="pdk-cw-fs" />
-  <project path="device/generic/arm64" name="device/generic/arm64" groups="pdk" />
+  <!-- project path="device/generic/arm64" name="device/generic/arm64" groups="pdk" / -->
   <project path="device/generic/armv7-a-neon" name="device/generic/armv7-a-neon" groups="pdk" />
   <project path="device/generic/common" name="device/generic/common" groups="pdk" />
   <project path="device/generic/goldfish" name="device/generic/goldfish" groups="pdk" />
-  <project path="device/generic/mips" name="device/generic/mips" groups="pdk" />
-  <project path="device/generic/mini-emulator-arm64" name="device/generic/mini-emulator-arm64" groups="pdk" />
+  <!-- project path="device/generic/mips" name="device/generic/mips" groups="pdk" / -->
+  <!-- project path="device/generic/mini-emulator-arm64" name="device/generic/mini-emulator-arm64" groups="pdk" / -->
   <project path="device/generic/mini-emulator-armv7-a-neon" name="device/generic/mini-emulator-armv7-a-neon" groups="pdk" />
-  <project path="device/generic/mini-emulator-mips" name="device/generic/mini-emulator-mips" groups="pdk" />
-  <project path="device/generic/mini-emulator-x86" name="device/generic/mini-emulator-x86" groups="pdk" />
-  <project path="device/generic/mini-emulator-x86_64" name="device/generic/mini-emulator-x86_64" groups="pdk" />
+  <!-- project path="device/generic/mini-emulator-mips" name="device/generic/mini-emulator-mips" groups="pdk" / -->
   <project path="device/generic/qemu" name="device/generic/qemu" />
-  <project path="device/generic/x86" name="device/generic/x86" groups="pdk" />
-  <project path="device/generic/x86_64" name="device/generic/x86_64" groups="pdk" />
-  <project path="device/google/accessory/arduino" name="device/google/accessory/arduino" groups="device" />
-  <project path="device/google/accessory/demokit" name="device/google/accessory/demokit" groups="device" />
-  <project path="device/google/atv" name="device/google/atv" groups="device,fugu" />
   <project path="device/qcom/common" name="SlimRoms/device_qcom_common" remote="github" revision="lp5.1" />
   <project path="device/sample" name="device/sample" groups="pdk" />
   <project path="docs/source.android.com" name="platform/docs/source.android.com" groups="pdk-cw-fs" />
@@ -339,7 +332,7 @@
   <project path="external/sqlite" name="platform/external/sqlite" groups="pdk" />
   <project path="external/srec" name="platform/external/srec" groups="pdk-cw-fs" />
   <project path="external/srtp" name="platform/external/srtp" groups="pdk-cw-fs" />
-  <project path="external/stlport" name="platform/external/stlport" groups="pdk" />
+  <!-- project path="external/stlport" name="platform/external/stlport" groups="pdk" / -->
   <project path="external/strace" name="platform/external/strace" groups="pdk-cw-fs" />
   <project path="external/stressapptest" name="platform/external/stressapptest" groups="pdk-cw-fs" />
   <project path="external/svox" name="platform/external/svox" groups="pdk-cw-fs" />
@@ -393,25 +386,9 @@
   <project path="hardware/akm" name="platform/hardware/akm" />
   <project path="hardware/broadcom/libbt" name="SlimRoms/hardware_broadcom_libbt" remote="github" revision="lp5.1" />
   <project path="hardware/broadcom/wlan" name="SlimRoms/hardware_broadcom_wlan" remote="github" revision="lp5.1" />
-  <project path="hardware/intel/audio_media" name="platform/hardware/intel/audio_media" groups="intel" />
-  <project path="hardware/intel/bootstub" name="platform/hardware/intel/bootstub" groups="intel" />
-  <project path="hardware/intel/common/bd_prov" name="platform/hardware/intel/common/bd_prov" groups="intel" />
-  <project path="hardware/intel/common/libmix" name="CM-zenfone2/android_hardware_intel_common_libmix" remote="github" revision="cm-12.1" />
-  <project path="hardware/intel/common/libstagefrighthw" name="CM-zenfone2/android_hardware_intel_common_libstagefrighthw" remote="github" revision="cm-12.1" />
-  <project path="hardware/intel/common/libva" name="CM-zenfone2/android_hardware_intel_common_libva" remote="github" revision="cm-12.1" />
-  <project path="hardware/intel/common/libwsbm" name="platform/hardware/intel/common/libwsbm" groups="intel" />
-  <project path="hardware/intel/common/omx-components" name="CM-zenfone2/android_hardware_intel_common_omx-components" remote="github" revision="cm-12.1" />
-  <project path="hardware/intel/common/utils" name="CM-zenfone2/android_hardware_intel_common_utils" remote="github" revision="cm-12.1" />
-  <project path="hardware/intel/common/wrs_omxil_core" name="CM-zenfone2/android_hardware_intel_common_wrs_omxil_core" remote="github" revision="cm-12.1" />
-  <project path="hardware/intel/img/hwcomposer" name="CM-zenfone2/android_hardware_intel_img_hwcomposer" remote="github" revision="cm-12.1" />
-  <project path="hardware/intel/img/libdrm" name="CM-zenfone2/android_hardware_intel_img_libdrm" remote="github" revision="cm-12.1" />
-  <project path="hardware/intel/img/psb_headers" name="platform/hardware/intel/img/psb_headers" groups="intel" />
-  <project path="hardware/intel/img/psb_video" name="CM-zenfone2/android_hardware_intel_img_psb_video" remote="github" revision="cm-12.1" />
   <project path="hardware/invensense" name="platform/hardware/invensense" groups="invensense" />
   <project path="hardware/libhardware" name="android_hardware_libhardware" groups="pdk" remote="cm" revision="cm-12.1" />
   <project path="hardware/libhardware_legacy" name="android_hardware_libhardware_legacy" groups="pdk" remote="cm" revision="cm-12.1" />
-  <project path="hardware/nvidia/audio" name="platform/hardware/nvidia/audio" groups="nvidia_audio" />
-  <project path="hardware/nvidia/tegra124" name="platform/hardware/nvidia/tegra124" groups="tegra124" />
   <project path="hardware/qcom/audio/default" name="android_hardware_qcom_audio" groups="qcom,qcom_audio" remote="cm" revision="cm-12.1" />
   <project path="hardware/qcom/audio-caf/apq8084" name="android_hardware_qcom_audio" groups="qcom,qcom_audio" remote="cm" revision="cm-12.1-caf-8084" />
   <project path="hardware/qcom/audio-caf/msm8226" name="android_hardware_qcom_audio" groups="qcom,qcom_audio" remote="cm" revision="cm-12.1-caf-8226" />
@@ -428,7 +405,7 @@
   <project path="hardware/qcom/display-caf/msm8960" name="android_hardware_qcom_display" groups="qcom,qcom_display" remote="cm" revision="cm-12.1-caf-8960" />
   <project path="hardware/qcom/display-caf/msm8974" name="android_hardware_qcom_display" groups="qcom,qcom_display" remote="cm" revision="cm-12.1-caf-8974" />
   <project path="hardware/qcom/fm" name="CyanogenMod/android_hardware_qcom_fm" remote="github" revision="cm-12.1" />
-  <project path="hardware/qcom/gps" name="SlimRoms/hardware_qcom_gps" remote="github" revision="lp5.1" />
+  <!-- project path="hardware/qcom/gps" name="SlimRoms/hardware_qcom_gps" remote="github" revision="lp5.1" / -->
   <project path="hardware/qcom/keymaster" name="android_hardware_qcom_keymaster" groups="qcom" remote="cm" revision="cm-12.1" />
   <project path="hardware/qcom/media/default" name="android_hardware_qcom_media" groups="qcom" remote="cm" revision="cm-12.1" />
   <project path="hardware/qcom/media-caf/apq8084" name="android_hardware_qcom_media" groups="qcom" remote="cm" revision="cm-12.1-caf-8084" />
@@ -446,11 +423,6 @@
   <project path="hardware/qcom/sensors" name="platform/hardware/qcom/sensors" groups="qcom" />
   <project path="hardware/qcom/wlan" name="SlimRoms/hardware_qcom_wlan" remote="github" revision="lp5.1" />
   <project path="hardware/ril-caf" name="SlimRoms/hardware_ril" remote="github" revision="lp5.1-caf" />
-  <project path="hardware/ti/omap3" name="SlimRoms/hardware_ti_omap3" remote="github" revision="lp5.1" />
-  <project path="hardware/ti/omap4" name="SlimRoms/hardware_ti_omap4" remote="github" revision="lp5.1" />
-  <project path="hardware/ti/omap4xxx" name="SlimRoms/hardware_ti_omap4xxx" remote="github" revision="lp5.1" />
-  <project path="hardware/ti/wlan" name="SlimRoms/hardware_ti_wlan" remote="github" revision="lp5.1" />
-  <project path="hardware/ti/wpan" name="SlimRoms/hardware_ti_wpan" remote="github" revision="lp5.1" />
   <project path="libcore" name="SlimRoms/android_libcore" remote="github" revision="lp5.1" />
   <project path="libnativehelper" name="platform/libnativehelper" groups="pdk" />
   <project path="ndk" name="platform/ndk" />
@@ -514,13 +486,6 @@
   <project path="packages/wallpapers/PhaseBeam" name="platform/packages/wallpapers/PhaseBeam" />
   <project path="pdk" name="platform/pdk" groups="pdk" />
   <project path="prebuilts/android-emulator" name="platform/prebuilts/android-emulator" clone-depth="1" />
-  <project path="prebuilts/clang/darwin-x86/3.1" name="platform/prebuilts/clang/darwin-x86/3.1" groups="pdk,darwin" />
-  <project path="prebuilts/clang/darwin-x86/3.2" name="platform/prebuilts/clang/darwin-x86/3.2" groups="pdk,darwin" />
-  <project path="prebuilts/clang/darwin-x86/arm/3.3" name="platform/prebuilts/clang/darwin-x86/arm/3.3" groups="arm,darwin,pdk-cw-fs" />
-  <project path="prebuilts/clang/darwin-x86/host/3.4" name="platform/prebuilts/clang/darwin-x86/host/3.4" groups="pdk,darwin" />
-  <project path="prebuilts/clang/darwin-x86/host/3.5" name="platform/prebuilts/clang/darwin-x86/host/3.5" groups="pdk,darwin" />
-  <project path="prebuilts/clang/darwin-x86/mips/3.3" name="platform/prebuilts/clang/darwin-x86/mips/3.3" groups="darwin,mips,pdk-cw-fs" />
-  <project path="prebuilts/clang/darwin-x86/x86/3.3" name="platform/prebuilts/clang/darwin-x86/x86/3.3" groups="darwin,pdk-cw-fs,x86" />
   <project path="prebuilts/clang/linux-x86/3.1" name="platform/prebuilts/clang/linux-x86/3.1" groups="pdk,linux" />
   <project path="prebuilts/clang/linux-x86/3.2" name="platform/prebuilts/clang/linux-x86/3.2" groups="pdk,linux" />
   <project path="prebuilts/clang/linux-x86/arm/3.3" name="platform/prebuilts/clang/linux-x86/arm/3.3" groups="arm,linux,pdk-cw-fs" />
@@ -532,27 +497,13 @@
   <project path="prebuilts/eclipse" name="platform/prebuilts/eclipse" groups="pdk" />
   <project path="prebuilts/eclipse-build-deps" name="platform/prebuilts/eclipse-build-deps" groups="notdefault,eclipse" />
   <project path="prebuilts/eclipse-build-deps-sources" name="platform/prebuilts/eclipse-build-deps-sources" groups="notdefault,eclipse" />
-  <project path="prebuilts/gcc/darwin-x86/aarch64/aarch64-linux-android-4.8" name="platform/prebuilts/gcc/darwin-x86/aarch64/aarch64-linux-android-4.8" groups="pdk,darwin,arm" />
-  <project path="prebuilts/gcc/darwin-x86/aarch64/aarch64-linux-android-4.9" name="platform/prebuilts/gcc/darwin-x86/aarch64/aarch64-linux-android-4.9" groups="pdk,darwin,arm" />
-  <project path="prebuilts/gcc/darwin-x86/arm/arm-eabi-4.8" name="platform/prebuilts/gcc/darwin-x86/arm/arm-eabi-4.8" groups="pdk,darwin,arm" />
-  <project path="prebuilts/gcc/darwin-x86/arm/arm-linux-androideabi-4.8" name="platform/prebuilts/gcc/darwin-x86/arm/arm-linux-androideabi-4.8" groups="pdk,darwin,arm" />
-  <project path="prebuilts/gcc/darwin-x86/host/headers" name="platform/prebuilts/gcc/darwin-x86/host/headers" groups="pdk,darwin" />
-  <project path="prebuilts/gcc/darwin-x86/host/i686-apple-darwin-4.2.1" name="platform/prebuilts/gcc/darwin-x86/host/i686-apple-darwin-4.2.1" groups="pdk,darwin" />
-  <project path="prebuilts/gcc/darwin-x86/mips/mips64el-linux-android-4.9" name="platform/prebuilts/gcc/darwin-x86/mips/mips64el-linux-android-4.9" groups="pdk,darwin,mips" />
-  <project path="prebuilts/gcc/darwin-x86/mips/mipsel-linux-android-4.8" name="platform/prebuilts/gcc/darwin-x86/mips/mipsel-linux-android-4.8" groups="pdk,darwin,mips" />
-  <project path="prebuilts/gcc/darwin-x86/mips/mips64el-linux-android-4.8" name="platform/prebuilts/gcc/darwin-x86/mips/mips64el-linux-android-4.8" groups="pdk,darwin,mips" />
-  <project path="prebuilts/gcc/darwin-x86/x86/x86_64-linux-android-4.8" name="platform/prebuilts/gcc/darwin-x86/x86/x86_64-linux-android-4.8" groups="pdk,darwin,x86" />
-  <project path="prebuilts/gcc/darwin-x86/x86/x86_64-linux-android-4.9" name="platform/prebuilts/gcc/darwin-x86/x86/x86_64-linux-android-4.9" revision="master" groups="pdk,darwin,x86" />
   <project path="prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.8" name="platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.8" groups="pdk,linux,arm" />
   <project path="prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9" name="CyanogenMod/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9" remote="github" groups="pdk,linux,arm" revision="cm-12.1" />
-  <project path="prebuilts/gcc/linux-x86/arm/arm-eabi-4.8" name="platform/prebuilts/gcc/linux-x86/arm/arm-eabi-4.8" groups="pdk,linux,arm" />
-  <project path="prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.8" name="platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.8" groups="pdk,linux,arm" />
+  <!-- project path="prebuilts/gcc/linux-x86/arm/arm-eabi-4.8" name="platform/prebuilts/gcc/linux-x86/arm/arm-eabi-4.8" groups="pdk,linux,arm" / -->
+  <!-- project path="prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.8" name="platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.8" groups="pdk,linux,arm" / -->
   <project path="prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.11-4.6" name="platform/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.11-4.6" groups="pdk,linux" />
   <project path="prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.11-4.8" name="platform/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.11-4.8" groups="pdk,linux" />
   <project path="prebuilts/gcc/linux-x86/host/x86_64-w64-mingw32-4.8" name="platform/prebuilts/gcc/linux-x86/host/x86_64-w64-mingw32-4.8" />
-  <project path="prebuilts/gcc/linux-x86/mips/mips64el-linux-android-4.9" name="platform/prebuilts/gcc/linux-x86/mips/mips64el-linux-android-4.9" groups="pdk,linux,mips" />
-  <project path="prebuilts/gcc/linux-x86/mips/mipsel-linux-android-4.8" name="platform/prebuilts/gcc/linux-x86/mips/mipsel-linux-android-4.8" groups="pdk,linux,mips" />
-  <project path="prebuilts/gcc/linux-x86/mips/mips64el-linux-android-4.8" name="platform/prebuilts/gcc/linux-x86/mips/mips64el-linux-android-4.8" groups="pdk,linux,mips" />
   <project path="prebuilts/gcc/linux-x86/x86/x86_64-linux-android-4.8" name="platform/prebuilts/gcc/linux-x86/x86/x86_64-linux-android-4.8" groups="pdk,linux,x86" />
   <project path="prebuilts/gcc/linux-x86/x86/x86_64-linux-android-4.9" name="platform/prebuilts/gcc/linux-x86/x86/x86_64-linux-android-4.9" groups="pdk,linux,x86" />
   <project path="prebuilts/gradle-plugin" name="platform/prebuilts/gradle-plugin" groups="pdk-cw-fs" />
@@ -560,7 +511,6 @@
   <project path="prebuilts/maven_repo/android" name="platform/prebuilts/maven_repo/android" groups="pdk-cw-fs" />
   <project path="prebuilts/misc" name="platform/prebuilts/misc" groups="pdk,tradefed" />
   <project path="prebuilts/ndk" name="platform/prebuilts/ndk" groups="pdk" />
-  <project path="prebuilts/python/darwin-x86/2.7.5" name="platform/prebuilts/python/darwin-x86/2.7.5" groups="darwin,pdk,pdk-cw-fs" />
   <project path="prebuilts/python/linux-x86/2.7.5" name="platform/prebuilts/python/linux-x86/2.7.5" groups="linux,pdk,pdk-cw-fs" />
   <project path="prebuilts/qemu-kernel" name="platform/prebuilts/qemu-kernel" groups="pdk" clone-depth="1" />
   <project path="prebuilts/sdk" name="platform/prebuilts/sdk" groups="pdk,tradefed" />
@@ -604,14 +554,37 @@
   <project path="external/stagefright-plugins" name="SlimRoms/android_external_stagefright-plugins" remote="github" revision="lp5.1" />
   
   <!-- CUSTOM TOOLCHAINS -->
-  <project path="prebuilts/gcc/linux-x86/arm/arm-eabi-4.9" name="UBERTC/arm-eabi-4.9" remote="bb" revision="master" />
-  <project path="prebuilts/gcc/linux-x86/arm/arm-eabi-6.0" name="UBERTC/arm-eabi-6.0" remote="bb" revision="master" />
-  <project path="prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9" name="UBERTC/arm-linux-androideabi-4.9" remote="bb" revision="master" />
-  <project path="prebuilts/gcc/linux-x86/arm/sabermod-arm-linux-gnueabi-5.1" name="arm-linux-gnueabi-5.1" remote="BrokenTC" revision="master" />
-  <project path="prebuilts/gcc/linux-x86/arm/sabermod-arm-linux-gnueabi-6.0" name="sabermod-arm-linux-gnueabi-6.0" remote="BrokenTC" revision="master" />
-  <project path="prebuilts/gcc/linux-x86/aarch64/aarch64-linux-gnu-5.2" name="aarch64-linux-gnu-5.2" remote="BrokenTC" revision="master" />
-  <project path="prebuilts/gcc/linux-x86/x86/x86_64-linux-gnu-5.2" name="x86_64-linux-gnu-5.2" remote="BrokenTC" revision="master" />
-  <project path="prebuilts/gcc/linux-x86/arm/arm-candy-linux-gnueabi" name="mugenman1111/arm-candy-linux-gnueabi.git" remote="gs" revision="c5-z" />
-  <project path="prebuilts/gcc/linux-x86/arm/linaro-lto" name="arter97/linaro-lto" remote="github" revision="master" />
+  <!-- project path="prebuilts/gcc/linux-x86/arm/arm-eabi-4.9" name="UBERTC/arm-eabi-4.9" remote="bb" revision="master" / -->
+  <!-- project path="prebuilts/gcc/linux-x86/arm/arm-eabi-6.0" name="UBERTC/arm-eabi-6.0" remote="bb" revision="master" / -->
+  <project path="prebuilts/gcc/linux-x86/arm/arm-eabi-4.8" name="UBERTC/arm-eabi-4.9" groups="pdk,linux,arm" remote="bb" revision="master"/>
+  <project path="prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9" name="UBERTC/arm-linux-androideabi-4.9" remote="bb" revision="master" / -->
+  <!-- project path="prebuilts/gcc/linux-x86/arm/sabermod-arm-linux-gnueabi-5.1" name="arm-linux-gnueabi-5.1" remote="BrokenTC" revision="master" / -->
+  <!-- project path="prebuilts/gcc/linux-x86/arm/sabermod-arm-linux-gnueabi-6.0" name="sabermod-arm-linux-gnueabi-6.0" remote="BrokenTC" revision="master" / -->
+  <!-- project path="prebuilts/gcc/linux-x86/aarch64/aarch64-linux-gnu-5.2" name="aarch64-linux-gnu-5.2" remote="BrokenTC" revision="master" / -->
+  <!-- project path="prebuilts/gcc/linux-x86/x86/x86_64-linux-gnu-5.2" name="x86_64-linux-gnu-5.2" remote="BrokenTC" revision="master" / -->
+  <!-- project path="prebuilts/gcc/linux-x86/arm/arm-candy-linux-gnueabi" name="mugenman1111/arm-candy-linux-gnueabi.git" remote="gs" revision="c5-z" / -->
+  <!-- project path="prebuilts/gcc/linux-x86/arm/linaro-lto" name="arter97/linaro-lto" remote="github" revision="master" / -->
 
+  <!-- Device Folders, Kernel & Proprietary BLOBS -->
+     <project path="vendor/huawei" name="CM13-Y300/proprietary_vendor_huawei" remote="github" revision="cm-13.0"/>
+     <project path="kernel/huawei/huawei-kernel-3.4" name="SlimLP-Y300/chil360-kernel" remote="github" revision="mm6.0"/>
+     <project path="device/huawei/msm7x27a-common" name="CM13-Y300/android_device_huawei_msm7x27a-common" remote="github" revision="cm-13.0"/>
+     <project path="device/huawei/u8833" name="CM13-Y300/android_device_huawei_u8833" remote="github" revision="cm-13.0"/>
+     <project path="device/huawei/u8951" name="CM13-Y300/android_device_huawei_u8951" remote="github" revision="cm-13.0"/>
+     <project path="device/huawei/u8825" name="CM13-Y300/android_device_huawei_u8825" remote="github" revision="cm-13.0"/>
+
+     <!-- WIFI -->
+     <project path="hardware/atheros/wifi/ath6kl-huawei" name="SlimLP-Y300/android_hardware_atheros_wifi_ath6kl-huawei" remote="github" revision="master" />
+     <project path="hardware/atheros/wlan" name="CM13-Y300/android_hardware_atheros_wlan" remote="github" revision="cm-13.0" />
+
+     <!-- GPS -->
+     <project path="hardware/qcom/gps" name="CM13-Y300/android_hardware_qcom_gps" remote="github" revision="cm-13.0" />
+
+     <!-- QCOM Hardware -->
+     <project path="hardware/qcom/display-caf/msm7x27a" name="CM13-Y300/android_hardware_qcom_display-caf" remote="github" revision="cm-13.0" />
+     <project path="hardware/qcom/media-caf/msm7x27a" name="SlimLP-Y300/hardware_qcom_media" remote="github" revision="lp5.1" />
+
+     <!-- Stlport -->
+     <project path="external/stlport" name="LineageOS/android_external_stlport" remote="github" revision="cm-13.0" />
+       
 </manifest>
