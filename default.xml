@@ -52,9 +52,9 @@
            sync-j="4" />
 
   <!-- Broken Repos -->
-  <project path="art" name="android_art" remote="broken" revision="lp5.1"  />
+  <project path="art" name="art" remote="broken" revision="lp5.1"  />
   <project path="bionic" name="bionic" remote="broken" revision="lp5.1" />
-  <project path="build" name="android_build" remote="broken" revision="lp5.1" groups="pdk,tradefed" >
+  <project path="build" name="build" remote="broken" revision="lp5.1" groups="pdk,tradefed" >
     <copyfile src="core/root.mk" dest="Makefile" />
   </project>
   <project path="device/qcom/sepolicy" name="device_qcom_sepolicy" remote="broken" revision="lp5.1" />
