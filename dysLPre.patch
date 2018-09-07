@@ -1,0 +1,4753 @@
+
+project device/huawei/msm7x27a-common/
+diff --git a/BoardConfigCommon.mk b/BoardConfigCommon.mk
+index 4279d92..73b15d4 100644
+--- a/BoardConfigCommon.mk
++++ b/BoardConfigCommon.mk
+@@ -82,7 +82,9 @@ BOARD_HAVE_BLUETOOTH := true
+ USE_DEVICE_SPECIFIC_CAMERA := true
+ 
+ # FM
+-#AUDIO_FEATURE_ENABLED_FM := true
++AUDIO_FEATURE_ENABLED_FM := true
++BOARD_HAVE_QCOM_FM := true
++COMMON_GLOBAL_CFLAGS += -DQCOM_FM_ENABLED
+ 
+ # GPS
+ BOARD_USES_QCOM_GPS := true
+@@ -103,7 +105,7 @@ BOARD_KERNEL_BASE := 0x00200000
+ BOARD_KERNEL_CMDLINE := androidboot.hardware=huawei androidboot.selinux=permissive
+ BOARD_PAGE_SIZE := 2048
+ TARGET_KERNEL_SOURCE := kernel/huawei/huawei-kernel-3.4
+-TARGET_KERNEL_CUSTOM_TOOLCHAIN := linaro-4.9-15.05/bin/arm-linux-gnueabihf-
++# TARGET_KERNEL_CUSTOM_TOOLCHAIN := linaro-4.9-15.05/bin/arm-linux-gnueabihf-
+ BOARD_MKBOOTIMG_ARGS := --ramdisk_offset 0x01800000
+ 
+ # Lights
+diff --git a/audio/Android.mk b/audio/Android.mk
+index 2c95d75..0579842 100644
+--- a/audio/Android.mk
++++ b/audio/Android.mk
+@@ -3,6 +3,8 @@
+ #AUDIO_POLICY_TEST := true
+ #ENABLE_AUDIO_DUMP := true
+ 
++ifneq ($(TARGET_BOOTLOADER_BOARD_NAME),u8825)
++TARGET_HAS_QACT := true
+ LOCAL_PATH := $(call my-dir)
+ include $(CLEAR_VARS)
+ 
+@@ -22,7 +24,7 @@ ifeq ($(BOARD_HAVE_BLUETOOTH),true)
+   LOCAL_CFLAGS += -DWITH_A2DP
+ endif
+ 
+-ifeq ($(AUDIO_FEATURE_ENABLED_FM),true)
++ifeq ($(BOARD_HAVE_QCOM_FM),true)
+   LOCAL_CFLAGS += -DWITH_QCOM_FM
+   LOCAL_CFLAGS += -DQCOM_FM_ENABLED
+ endif
+@@ -41,12 +43,7 @@ LOCAL_CFLAGS += -DQCOM_TUNNEL_LPA_ENABLED
+ LOCAL_SHARED_LIBRARIES := \
+     libcutils       \
+     libutils        \
+-    libmedia        \
+-    libaudioalsa
+-
+-# hack for prebuilt
+-$(shell mkdir -p $(OUT)/obj/SHARED_LIBRARIES/libaudioalsa_intermediates/)
+-$(shell touch $(OUT)/obj/SHARED_LIBRARIES/libaudioalsa_intermediates/export_includes)
++    libmedia
+ 
+ ifneq ($(TARGET_SIMULATOR),true)
+ LOCAL_SHARED_LIBRARIES += libdl
+@@ -84,7 +81,6 @@ LOCAL_ADDITIONAL_DEPENDENCIES := $(TARGET_OUT_INTERMEDIATES)/KERNEL_OBJ/usr
+ include $(BUILD_SHARED_LIBRARY)
+ 
+ # The audio policy is implemented on top of legacy policy code
+-ifeq ($(USE_LEGACY_AUDIO_POLICY), 1)
+ include $(CLEAR_VARS)
+ 
+ LOCAL_SRC_FILES := \
+diff --git a/audio/AudioHardware.cpp b/audio/AudioHardware.cpp
+index 6f4a659..6b6090b 100644
+--- a/audio/AudioHardware.cpp
++++ b/audio/AudioHardware.cpp
+@@ -1,6 +1,6 @@
+ /*
+ ** Copyright 2008, The Android Open-Source Project
+-** Copyright (c) 2011-2013, The Linux Foundation. All rights reserved.
++** Copyright (c) 2011-2012, Code Aurora Forum. All rights reserved.
+ **
+ ** Licensed under the Apache License, Version 2.0 (the "License");
+ ** you may not use this file except in compliance with the License.
+@@ -40,9 +40,6 @@ extern "C" {
+ #endif
+ //#include <media/AudioRecord.h>
+ 
+-#ifdef WITH_QCOM_VOIP_OVER_MVS
+-#include <linux/msm_audio_mvs.h>
+-#endif
+ 
+ #define COMBO_DEVICE_SUPPORTED // Headset speaker combo device not supported on this target
+ #define DUALMIC_KEY "dualmic_enabled"
+@@ -155,8 +152,7 @@ AudioHardware::AudioHardware() :
+     ,mFmFd(-1),FmA2dpStatus(-1)
+ #endif
+ #ifdef QCOM_VOIP_ENABLED
+-,mVoipFd(-1), mVoipInActive(false), mVoipOutActive(false), mDirectOutput(0), mVoipBitRate(0),
+-mDirectOutrefCnt(0)
++,mVoipFd(-1), mVoipInActive(false), mVoipOutActive(false), mDirectOutput(0), mVoipBitRate(0)
+ #endif /*QCOM_VOIP_ENABLED*/
+ {
+    if (get_audpp_filter() == 0) {
+@@ -274,17 +270,6 @@ status_t AudioHardware::initCheck()
+     return mInit ? NO_ERROR : NO_INIT;
+ }
+ 
+-// default implementation calls its "without flags" counterpart
+-AudioStreamOut* AudioHardware::openOutputStreamWithFlags(uint32_t devices,
+-                                          audio_output_flags_t flags,
+-                                          int *format,
+-                                          uint32_t *channels,
+-                                          uint32_t *sampleRate,
+-                                          status_t *status)
+-{
+-    return openOutputStream(devices, format, channels, sampleRate, status);
+-}
+-
+ AudioStreamOut* AudioHardware::openOutputStream(uint32_t devices, int *format, uint32_t *channels, uint32_t *sampleRate, status_t *status)
+ {
+     audio_output_flags_t flags = static_cast<audio_output_flags_t> (*status);
+@@ -316,11 +301,6 @@ AudioStreamOut* AudioHardware::openOutputStream(uint32_t devices, int *format, u
+                 }
+                 if (lStatus == NO_ERROR) {
+                     mDirectOutput = out;
+-                    mDirectOutrefCnt++;
+-                    mLock.unlock();
+-                    if (mVoipInActive)
+-                        setupDeviceforVoipCall(true);
+-                    mLock.lock();
+                     ALOGV(" \n set sucessful for AudioStreamOutDirect");
+                 } else {
+                     ALOGE(" \n set Failed for AudioStreamOutDirect");
+@@ -328,9 +308,8 @@ AudioStreamOut* AudioHardware::openOutputStream(uint32_t devices, int *format, u
+                 }
+             }
+             else {
+-               mDirectOutrefCnt++;
+-                ALOGE(" \n AudioHardware::AudioStreamOutDirect is already open refCnt %d", mDirectOutrefCnt);
+-             }
++                ALOGE(" \n AudioHardware::AudioStreamOutDirect is already open");
++            }
+             return mDirectOutput;
+         }
+         else
+@@ -404,12 +383,9 @@ void AudioHardware::closeOutputStream(AudioStreamOut* out) {
+     }
+ #ifdef QCOM_VOIP_ENABLED
+     else if (mDirectOutput == out) {
+-        mDirectOutrefCnt--;
+-        if (mDirectOutrefCnt <= 0) {
+-            ALOGV(" deleting mDirectOutput \n");
+-            delete mDirectOutput;
+-            mDirectOutput = 0;
+-        }
++        ALOGV(" deleting  mDirectOutput \n");
++        delete mDirectOutput;
++        mDirectOutput = 0;
+     }
+ #endif /*QCOM_VOIP_ENABLED*/
+     else if (mOutputLPA == out) {
+@@ -433,7 +409,7 @@ AudioStreamIn* AudioHardware::openInputStream(
+ 
+     mLock.lock();
+ #ifdef QCOM_VOIP_ENABLED
+-    if ((devices == AudioSystem::DEVICE_IN_COMMUNICATION) && (*sampleRate == 8000)) {
++    if(devices == AudioSystem::DEVICE_IN_COMMUNICATION && (*sampleRate == 8000)) {
+         ALOGV("Create Audio stream Voip \n");
+         AudioStreamInVoip* inVoip = new AudioStreamInVoip();
+         status_t lStatus = NO_ERROR;
+@@ -449,25 +425,10 @@ AudioStreamIn* AudioHardware::openInputStream(
+         }
+         mVoipInputs.add(inVoip);
+         mLock.unlock();
+-        if (mVoipOutActive) {
+-            inVoip->mSetupDevice = true;
+-            setupDeviceforVoipCall(true);
+-        }
+         return inVoip;
+     } else
+ #endif /*QCOM_VOIP_ENABLED*/
+     {
+-        if ( (mMode == AudioSystem::MODE_IN_CALL) &&
+-            (getInputSampleRate(*sampleRate) > AUDIO_HW_IN_SAMPLERATE) &&
+-            (*format == AUDIO_HW_IN_FORMAT) )
+-        {
+-            ALOGE("PCM recording, in a voice call, with sample rate more than 8K not supported \
+-                 re-configure with 8K and try software re-sampler ");
+-            *status = -EINVAL;
+-            *sampleRate = AUDIO_HW_IN_SAMPLERATE;
+-            mLock.unlock();
+-            return 0;
+-        }
+         AudioStreamInMSM72xx* in = new AudioStreamInMSM72xx();
+         status_t lStatus = in->set(this, devices, format, channels, sampleRate, acoustic_flags);
+         if (status) {
+@@ -685,31 +646,25 @@ status_t AudioHardware::setParameters(const String8& keyValuePairs)
+ }
+ #ifdef QCOM_VOIP_ENABLED
+ 
+-uint32_t AudioHardware::getMvsMode(int format, int rate)
++uint32_t AudioHardware::getMvsMode(int format)
+ {
+     switch(format) {
+-    case AUDIO_FORMAT_PCM_16_BIT:
+-        if(rate == AUDIO_HW_VOIP_SAMPLERATE_8K) {
+-            return MVS_MODE_PCM;
+-        } else if(rate== AUDIO_HW_VOIP_SAMPLERATE_16K) {
+-            return MVS_MODE_PCM_WB;
+-        } else {
+-            return MVS_MODE_PCM;
+-        }
++    case AudioSystem::PCM_16_BIT:
++        return MVS_MODE_PCM;
+         break;
+-    case AUDIO_FORMAT_AMR_NB:
++    case AudioSystem::AMR_NB:
+         return MVS_MODE_AMR;
+         break;
+-    case AUDIO_FORMAT_AMR_WB:
++    case AudioSystem::AMR_WB:
+         return MVS_MODE_AMR_WB;
+         break;
+-    case AUDIO_FORMAT_EVRC:
++    case AudioSystem::EVRC:
+         return   MVS_MODE_IS127;
+         break;
+-    case AUDIO_FORMAT_EVRCB:
++    case AudioSystem::EVRCB:
+         return MVS_MODE_4GV_NB;
+         break;
+-    case AUDIO_FORMAT_EVRCWB:
++    case AudioSystem::EVRCWB:
+         return MVS_MODE_4GV_WB;
+         break;
+     default:
+@@ -822,32 +777,6 @@ uint32_t AudioHardware::getMvsRateType(uint32_t mvsMode, uint32_t *rateType)
+     return ret;
+ }
+ #endif /*QCOM_VOIP_ENABLED*/
+-
+-status_t AudioHardware::setMasterMute(bool muted) {
+-    return INVALID_OPERATION;
+-}
+-
+-int AudioHardware::createAudioPatch(unsigned int num_sources,
+-        const struct audio_port_config *sources,
+-        unsigned int num_sinks,
+-        const struct audio_port_config *sinks,
+-        audio_patch_handle_t *handle) {
+-    return INVALID_OPERATION;
+-}
+-
+-int AudioHardware::releaseAudioPatch(audio_patch_handle_t handle) {
+-    return INVALID_OPERATION;
+-}
+-
+-int AudioHardware::getAudioPort(struct audio_port *port) {
+-    return INVALID_OPERATION;
+-}
+-
+-int AudioHardware::setAudioPortConfig(
+-        const struct audio_port_config *config) {
+-    return INVALID_OPERATION;
+-}
+-
+ String8 AudioHardware::getParameters(const String8& keys)
+ {
+     AudioParameter param = AudioParameter(keys);
+@@ -874,6 +803,14 @@ String8 AudioHardware::getParameters(const String8& keys)
+             param.addInt(String8("EVRC"), true );
+         }
+     }
++#ifdef QCOM_FM_ENABLED
++    key = String8("Fm-radio");
++    if ( param.get(key,value) == NO_ERROR ) {
++        if (IsFmon()||(mCurSndDevice == SND_DEVICE_FM_ANALOG_STEREO_HEADSET)){
++            param.addInt(String8("isFMON"), true );
++        }
++    }
++#endif
+     key = String8(ECHO_SUPRESSION);
+     if (param.get(key, value) == NO_ERROR) {
+         value = String8("yes");
+@@ -1560,14 +1497,14 @@ size_t AudioHardware::getInputBufferSize(uint32_t sampleRate, int format, int ch
+ {
+     ALOGD("AudioHardware::getInputBufferSize sampleRate %d format %d channelCount %d"
+             ,sampleRate, format, channelCount);
+-    if ( (format != AUDIO_FORMAT_PCM_16_BIT) &&
+-         (format != AUDIO_FORMAT_AMR_NB)     &&
+-         (format != AUDIO_FORMAT_AMR_WB)     &&
+-         (format != AUDIO_FORMAT_EVRC)       &&
+-         (format != AUDIO_FORMAT_EVRCB)      &&
+-         (format != AUDIO_FORMAT_EVRCWB)     &&
+-         (format != AUDIO_FORMAT_QCELP)      &&
+-         (format != AUDIO_FORMAT_AAC)){
++    if ( (format != AudioSystem::PCM_16_BIT) &&
++         (format != AudioSystem::AMR_NB)     &&
++         (format != AudioSystem::AMR_WB)     &&
++         (format != AudioSystem::EVRC)       &&
++         (format != AudioSystem::EVRCB)      &&
++         (format != AudioSystem::EVRCWB)     &&
++         (format != AudioSystem::QCELP)      &&
++         (format != AudioSystem::AAC)){
+         ALOGW("getInputBufferSize bad format: 0x%x", format);
+         return 0;
+     }
+@@ -1576,13 +1513,13 @@ size_t AudioHardware::getInputBufferSize(uint32_t sampleRate, int format, int ch
+         return 0;
+     }
+ 
+-    if(format == AUDIO_FORMAT_AMR_NB)
++    if(format == AudioSystem::AMR_NB)
+        return 320*channelCount;
+-    else if (format == AUDIO_FORMAT_EVRC)
++    else if (format == AudioSystem::EVRC)
+        return 230*channelCount;
+-    else if (format == AUDIO_FORMAT_QCELP)
++    else if (format == AudioSystem::QCELP)
+        return 350*channelCount;
+-    else if (format == AUDIO_FORMAT_AAC)
++    else if (format == AudioSystem::AAC)
+        return 2048;
+ #ifdef QCOM_VOIP_ENABLED
+     else if (sampleRate == AUDIO_HW_VOIP_SAMPLERATE_8K)
+@@ -1839,7 +1776,7 @@ status_t AudioHardware::doRouting(AudioStreamInMSM72xx *input, int outputDevice)
+                 ALOGI("Routing audio to Bluetooth PCM\n");
+                 new_snd_device = SND_DEVICE_BT;
+             } else if (inputDevice & AudioSystem::DEVICE_IN_WIRED_HEADSET) {
+-                    ALOGI("Routing audio in to Wired Headset\n");
++                    ALOGI("Routing audio to Wired Headset\n");
+                     new_snd_device = SND_DEVICE_HEADSET;
+ #ifdef QCOM_FM_ENABLED
+             } else if (inputDevice & AudioSystem::DEVICE_IN_FM_RX_A2DP) {
+@@ -1847,12 +1784,9 @@ status_t AudioHardware::doRouting(AudioStreamInMSM72xx *input, int outputDevice)
+                     new_snd_device = SND_DEVICE_FM_DIGITAL_BT_A2DP_HEADSET;
+                     FmA2dpStatus=true;
+             } else if (inputDevice & AudioSystem::DEVICE_IN_FM_RX) {
+-                    ALOGI("Routing audio-in to FM-RX\n");
++                    ALOGI("Routing audio to FM\n");
+                     enableDgtlFmDriver = true;
+ #endif
+-            } else if (outputDevices & AudioSystem::DEVICE_OUT_WIRED_HEADPHONE) {
+-                    ALOGI("Routing audio to Wired Headphone\n");
+-                    new_snd_device = SND_DEVICE_HEADSET;
+             } else {
+                 if (outputDevices & AudioSystem::DEVICE_OUT_SPEAKER) {
+                     ALOGI("Routing audio to Speakerphone\n");
+@@ -1959,6 +1893,12 @@ status_t AudioHardware::doRouting(AudioStreamInMSM72xx *input, int outputDevice)
+         }
+     }
+ #ifdef QCOM_FM_ENABLED
++    if ((mFmFd == -1) && enableDgtlFmDriver ) {
++        enableFM();
++    } else if ((mFmFd != -1) && !enableDgtlFmDriver ) {
++        disableFM();
++    }
++
+     if((outputDevices  == 0) && (FmA2dpStatus == true))
+        new_snd_device = SND_DEVICE_FM_DIGITAL_BT_A2DP_HEADSET;
+ #endif
+@@ -2115,14 +2055,9 @@ AudioHardware::AudioStreamInMSM72xx *AudioHardware::getActiveInput_l()
+ #ifdef QCOM_VOIP_ENABLED
+ status_t AudioHardware::setupDeviceforVoipCall(bool value)
+ {
+-    ALOGV("setupDeviceforVoipCall value %d",value);
+-    if (mMode == AudioSystem::MODE_IN_CALL && value == false) {
+-        ALOGE("mode already set for voice call, do not change to normal");
+-        return NO_ERROR;
+-    }
+ 
+     int mode = (value ? AudioSystem::MODE_IN_COMMUNICATION : AudioSystem::MODE_NORMAL);
+-    if (setMode(mode) == BAD_VALUE) {
++    if (setMode(mode) != NO_ERROR) {
+         ALOGV("setMode fails");
+         return UNKNOWN_ERROR;
+     }
+@@ -2147,7 +2082,7 @@ AudioHardware::AudioStreamInVoip::AudioStreamInVoip() :
+     mHardware(0), mFd(-1), mState(AUDIO_INPUT_CLOSED), mRetryCount(0),
+     mFormat(AUDIO_HW_IN_FORMAT), mChannels(AUDIO_HW_IN_CHANNELS),
+     mSampleRate(AUDIO_HW_VOIP_SAMPLERATE_8K), mBufferSize(AUDIO_HW_VOIP_BUFFERSIZE_8K),
+-    mAcoustics((AudioSystem::audio_in_acoustics)0), mDevices(0), mSetupDevice(false)
++    mAcoustics((AudioSystem::audio_in_acoustics)0), mDevices(0)
+ {
+ }
+ 
+@@ -2158,12 +2093,12 @@ status_t AudioHardware::AudioStreamInVoip::set(
+ {
+     ALOGD("AudioStreamInVoip::set devices = %u format = %x pChannels = %u Rate = %u \n",
+          devices, *pFormat, *pChannels, *pRate);
+-    if ((pFormat == 0) || BAD_INDEX == hw->getMvsMode(*pFormat, *pRate)) {
++    if ((pFormat == 0) || BAD_INDEX == hw->getMvsMode(*pFormat)) {
+         ALOGE("Audio Format (%x) not supported \n",*pFormat);
+         return BAD_VALUE;
+     }
+ 
+-    if (*pFormat == AUDIO_FORMAT_PCM_16_BIT){
++    if (*pFormat == AudioSystem::PCM_16_BIT){
+     if (pRate == 0) {
+         return BAD_VALUE;
+     }
+@@ -2221,7 +2156,7 @@ status_t AudioHardware::AudioStreamInVoip::set(
+            goto Error;
+         }
+ 
+-        mvs_config.mvs_mode = mHardware->getMvsMode(*pFormat, *pRate);
++        mvs_config.mvs_mode = mHardware->getMvsMode(*pFormat);
+         status = mHardware->getMvsRateType(mvs_config.mvs_mode ,&mvs_config.rate_type);
+         ALOGD("set mvs config mode %d rate_type %d", mvs_config.mvs_mode, mvs_config.rate_type);
+         if (status < 0) {
+@@ -2263,6 +2198,9 @@ status_t AudioHardware::AudioStreamInVoip::set(
+ 
+     mHardware->mVoipInActive = true;
+ 
++    if (mHardware->mVoipOutActive)
++        mHardware->setupDeviceforVoipCall(true);
++
+     if (!acoustic)
+         return NO_ERROR;
+ 
+@@ -2296,7 +2234,7 @@ ssize_t AudioHardware::AudioStreamInVoip::read( void* buffer, ssize_t bytes)
+     size_t count = bytes;
+     size_t totalBytesRead = 0;
+ 
+-    if ((mState < AUDIO_INPUT_OPENED) || (mHardware->mVoipFd == -1)) {
++    if (mState < AUDIO_INPUT_OPENED) {
+        ALOGE(" reopen the device \n");
+         AudioHardware *hw = mHardware;
+         hw->mLock.lock();
+@@ -2317,13 +2255,9 @@ ssize_t AudioHardware::AudioStreamInVoip::read( void* buffer, ssize_t bytes)
+       return 0;
+     }
+ 
+-    if (!mSetupDevice) {
+-        mSetupDevice = true;
+-        mHardware->setupDeviceforVoipCall(true);
+-    }
+     struct msm_audio_mvs_frame audio_mvs_frame;
+     memset(&audio_mvs_frame, 0, sizeof(audio_mvs_frame));
+-    if(mFormat == AUDIO_FORMAT_PCM_16_BIT) {
++    if(mFormat == AudioSystem::PCM_16_BIT) {
+     audio_mvs_frame.frame_type = 0;
+        while (count >= mBufferSize) {
+            audio_mvs_frame.len = mBufferSize;
+@@ -2372,7 +2306,6 @@ status_t AudioHardware::AudioStreamInVoip::standby()
+             ALOGD("MVS stop returned %d %d %d\n", ret, __LINE__, mHardware->mVoipFd);
+             ::close(mFd);
+             mFd = mHardware->mVoipFd = -1;
+-            mSetupDevice = false;
+             mHardware->setupDeviceforVoipCall(false);
+             ALOGD("MVS driver closed %d mFd %d", __LINE__, mHardware->mVoipFd);
+         }
+@@ -2663,30 +2596,11 @@ bool AudioHardware::AudioStreamOutMSM72xx::checkStandby()
+ status_t AudioHardware::AudioStreamOutMSM72xx::setParameters(const String8& keyValuePairs)
+ {
+     AudioParameter param = AudioParameter(keyValuePairs);
+-    String8 key;
++    String8 key = String8(AudioParameter::keyRouting);
+     status_t status = NO_ERROR;
+     int device;
+     ALOGV("AudioStreamOutMSM72xx::setParameters() %s", keyValuePairs.string());
+ 
+-#ifdef QCOM_FM_ENABLED
+-    float fm_volume;
+-    key = String8(AUDIO_PARAMETER_KEY_FM_VOLUME);
+-    if (param.getFloat(key, fm_volume) == NO_ERROR) {
+-        mHardware->setFmVolume(fm_volume);
+-        param.remove(key);
+-    }
+-
+-    key = String8(AUDIO_PARAMETER_KEY_HANDLE_FM);
+-    if (param.getInt(key, device) == NO_ERROR) {
+-        if (device & AUDIO_DEVICE_OUT_FM)
+-            mHardware->enableFM();
+-        else
+-            mHardware->disableFM();
+-        param.remove(key);
+-    }
+-#endif
+-
+-    key = String8(AudioParameter::keyRouting);
+     if (param.getInt(key, device) == NO_ERROR) {
+         mDevices = device;
+         ALOGV("set output routing %x", mDevices);
+@@ -2721,16 +2635,10 @@ status_t AudioHardware::AudioStreamOutMSM72xx::getRenderPosition(uint32_t *dspFr
+     return INVALID_OPERATION;
+ }
+ 
+-status_t AudioHardware::AudioStreamOutMSM72xx::getPresentationPosition(uint64_t *frames, struct timespec *timestamp)
+-{
+-    //TODO: enable when supported by driver
+-    return INVALID_OPERATION;
+-}
+-
+ #ifdef QCOM_VOIP_ENABLED
+ AudioHardware::AudioStreamOutDirect::AudioStreamOutDirect() :
+     mHardware(0), mFd(-1), mStartCount(0), mRetryCount(0), mStandby(true), mDevices(0),mChannels(AudioSystem::CHANNEL_OUT_MONO),
+-    mSampleRate(AUDIO_HW_VOIP_SAMPLERATE_8K), mBufferSize(AUDIO_HW_VOIP_BUFFERSIZE_8K), mFormat(AUDIO_FORMAT_PCM_16_BIT)
++    mSampleRate(AUDIO_HW_VOIP_SAMPLERATE_8K), mBufferSize(AUDIO_HW_VOIP_BUFFERSIZE_8K), mFormat(AudioSystem::PCM_16_BIT)
+ {
+ }
+ 
+@@ -2741,16 +2649,16 @@ status_t AudioHardware::AudioStreamOutDirect::set(
+     uint32_t lChannels = pChannels ? *pChannels : 0;
+     uint32_t lRate = pRate ? *pRate : 0;
+ 
+-    ALOGD("AudioStreamOutDirect::set  lFormat = %x lChannels= %u lRate = %u\n",
++    ALOGD("set lFormat = %x lChannels= %u lRate = %u\n",
+         lFormat, lChannels, lRate );
+ 
+-    if ((pFormat == 0) || BAD_INDEX == hw->getMvsMode(*pFormat, lRate)) {
++    if ((pFormat == 0) || BAD_INDEX == hw->getMvsMode(*pFormat)) {
+         ALOGE("Audio Format (%x) not supported \n",*pFormat);
+         return BAD_VALUE;
+     }
+ 
+ 
+-    if (*pFormat == AUDIO_FORMAT_PCM_16_BIT){
++    if (*pFormat == AudioSystem::PCM_16_BIT){
+         // fix up defaults
+         if (lFormat == 0) lFormat = format();
+         if (lChannels == 0) lChannels = channels();
+@@ -2758,9 +2666,11 @@ status_t AudioHardware::AudioStreamOutDirect::set(
+ 
+         // check values
+         if ((lFormat != format()) ||
+-            (lChannels != channels())) {
++            (lChannels != channels()) ||
++            (lRate != sampleRate())) {
+             if (pFormat) *pFormat = format();
+             if (pChannels) *pChannels = channels();
++            if (pRate) *pRate = sampleRate();
+             ALOGE("  AudioStreamOutDirect::set return bad values\n");
+             return BAD_VALUE;
+         }
+@@ -2790,6 +2700,9 @@ status_t AudioHardware::AudioStreamOutDirect::set(
+     mDevices = devices;
+     mHardware->mVoipOutActive = true;
+ 
++    if (mHardware->mVoipInActive)
++        mHardware->setupDeviceforVoipCall(true);
++
+     return NO_ERROR;
+ }
+ 
+@@ -2835,7 +2748,7 @@ ssize_t AudioHardware::AudioStreamOutDirect::write(const void* buffer, size_t by
+                goto Error;
+             }
+ 
+-            mvs_config.mvs_mode = mHardware->getMvsMode(mFormat, mSampleRate);
++            mvs_config.mvs_mode = mHardware->getMvsMode(mFormat);
+             status = mHardware->getMvsRateType(mvs_config.mvs_mode ,&mvs_config.rate_type);
+             ALOGD("set mvs config mode %d rate_type %d", mvs_config.mvs_mode, mvs_config.rate_type);
+             if (status < 0) {
+@@ -2863,7 +2776,7 @@ ssize_t AudioHardware::AudioStreamOutDirect::write(const void* buffer, size_t by
+     }
+     struct msm_audio_mvs_frame audio_mvs_frame;
+     memset(&audio_mvs_frame, 0, sizeof(audio_mvs_frame));
+-    if (mFormat == AUDIO_FORMAT_PCM_16_BIT) {
++    if (mFormat == AudioSystem::PCM_16_BIT) {
+         audio_mvs_frame.frame_type = 0;
+         while (count) {
+             audio_mvs_frame.len = mBufferSize;
+@@ -2980,7 +2893,7 @@ status_t AudioHardware::AudioStreamOutDirect::setParameters(const String8& keyVa
+     if (param.getInt(key, device) == NO_ERROR) {
+         mDevices = device;
+         ALOGV("set output routing %x", mDevices);
+-        status = mHardware->doRouting(NULL, device);
++        status = mHardware->doRouting(NULL);
+         param.remove(key);
+     }
+ 
+@@ -3015,12 +2928,6 @@ status_t AudioHardware::AudioStreamOutDirect::getRenderPosition(uint32_t *dspFra
+     //TODO: enable when supported by driver
+     return INVALID_OPERATION;
+ }
+-
+-status_t AudioHardware::AudioStreamOutDirect::getPresentationPosition(uint64_t *frames, struct timespec *timestamp)
+-{
+-    //TODO: enable when supported by driver
+-    return INVALID_OPERATION;
+-}
+ #endif /*QCOM_VOIP_ENABLED*/
+ 
+ // End AudioStreamOutDirect
+@@ -3048,10 +2955,10 @@ status_t AudioHardware::AudioStreamInMSM72xx::set(
+ 
+     if ((pFormat == 0) ||
+         ((*pFormat != AUDIO_HW_IN_FORMAT) &&
+-         (*pFormat != AUDIO_FORMAT_AMR_NB) &&
+-         (*pFormat != AUDIO_FORMAT_EVRC) &&
+-         (*pFormat != AUDIO_FORMAT_QCELP) &&
+-         (*pFormat != AUDIO_FORMAT_AAC)))
++         (*pFormat != AudioSystem::AMR_NB) &&
++         (*pFormat != AudioSystem::EVRC) &&
++         (*pFormat != AudioSystem::QCELP) &&
++         (*pFormat != AudioSystem::AAC)))
+     {
+         *pFormat = AUDIO_HW_IN_FORMAT;
+         ALOGE("audio format bad value");
+@@ -3141,9 +3048,9 @@ status_t AudioHardware::AudioStreamInMSM72xx::set(
+     mSampleRate = config.sample_rate;
+     mBufferSize = config.buffer_size;
+     }
+-    else if( (*pFormat == AUDIO_FORMAT_AMR_NB) ||
+-             (*pFormat == AUDIO_FORMAT_EVRC) ||
+-             (*pFormat == AUDIO_FORMAT_QCELP))
++    else if( (*pFormat == AudioSystem::AMR_NB) ||
++             (*pFormat == AudioSystem::EVRC) ||
++             (*pFormat == AudioSystem::QCELP))
+            {
+ 
+       // open vocie memo input device
+@@ -3193,38 +3100,38 @@ status_t AudioHardware::AudioStreamInMSM72xx::set(
+ 
+       switch (*pFormat)
+       {
+-        case AUDIO_FORMAT_AMR_NB:
++        case AudioSystem::AMR_NB:
+         {
+           ALOGI("Recording Format: AMR_NB");
+           gcfg.capability = RPC_VOC_CAP_AMR; // RPC_VOC_CAP_AMR (64)
+           gcfg.max_rate = RPC_VOC_AMR_RATE_1220; // Max rate (Fixed frame)
+           gcfg.min_rate = RPC_VOC_AMR_RATE_1220; // Min rate (Fixed frame length)
+           gcfg.frame_format = RPC_VOC_PB_AMR; // RPC_VOC_PB_AMR
+-          mFormat = AUDIO_FORMAT_AMR_NB;
++          mFormat = AudioSystem::AMR_NB;
+           mBufferSize = 320;
+           break;
+         }
+ 
+-        case AUDIO_FORMAT_EVRC:
++        case AudioSystem::EVRC:
+         {
+           ALOGI("Recording Format: EVRC");
+           gcfg.capability = RPC_VOC_CAP_IS127;
+           gcfg.max_rate = RPC_VOC_1_RATE; // Max rate (Fixed frame)
+           gcfg.min_rate = RPC_VOC_1_RATE; // Min rate (Fixed frame length)
+           gcfg.frame_format = RPC_VOC_PB_NATIVE_QCP;
+-          mFormat = AUDIO_FORMAT_EVRC;
++          mFormat = AudioSystem::EVRC;
+           mBufferSize = 230;
+           break;
+         }
+ 
+-        case AUDIO_FORMAT_QCELP:
++        case AudioSystem::QCELP:
+         {
+           ALOGI("Recording Format: QCELP");
+           gcfg.capability = RPC_VOC_CAP_IS733; // RPC_VOC_CAP_AMR (64)
+           gcfg.max_rate = RPC_VOC_1_RATE; // Max rate (Fixed frame)
+           gcfg.min_rate = RPC_VOC_1_RATE; // Min rate (Fixed frame length)
+           gcfg.frame_format = RPC_VOC_PB_NATIVE_QCP;
+-          mFormat = AUDIO_FORMAT_QCELP;
++          mFormat = AudioSystem::QCELP;
+           mBufferSize = 350;
+           break;
+         }
+@@ -3259,7 +3166,7 @@ status_t AudioHardware::AudioStreamInMSM72xx::set(
+       ALOGV("After set dtx_enable = 0x%8x\n",gcfg.dtx_enable);
+       ALOGV("After set data_req_ms = 0x%8x\n",gcfg.data_req_ms);
+     }
+-    else if(*pFormat == AUDIO_FORMAT_AAC) {
++    else if(*pFormat == AudioSystem::AAC) {
+       // open AAC input device
+                status = ::open(PCM_IN_DEVICE, O_RDWR);
+                if (status < 0) {
+@@ -3509,13 +3416,15 @@ ssize_t AudioHardware::AudioSessionOutLPA::write(const void* buffer, size_t byte
+         if (bytes < LPA_BUFFER_SIZE)
+             bytes = 0;
+         else
+-            return UNKNOWN_ERROR;
++            return 0;
+     }
+ 
++    if (mSkipWrite)
++        mSkipWrite = false;
++
+     //2.) Dequeue the buffer from empty buffer queue. Copy the data to be
+     //    written into the buffer. Then Enqueue the buffer to the filled
+     //    buffer queue
+-    mEmptyQueueMutex.lock();
+     List<BuffersAllocated>::iterator it = mEmptyQueue.begin();
+     BuffersAllocated buf = *it;
+     mEmptyQueue.erase(it);
+@@ -3577,6 +3486,9 @@ ssize_t AudioHardware::AudioSessionOutLPA::write(const void* buffer, size_t byte
+ 
+     if (bytes < LPA_BUFFER_SIZE) {
+         ALOGV("Last buffer case");
++        if (fsync(afd) != 0) {
++            ALOGE("fsync failed.");
++        }
+         mReachedEOS = true;
+     }
+ 
+@@ -3637,7 +3549,6 @@ status_t AudioHardware::AudioSessionOutLPA::openAudioSessionDevice( )
+     } else {
+         //initCheck = true;
+         ALOGV("pcm_lp_dec: pcm_lp_dec Driver opened");
+-        lpa_playback_in_progress = true;
+     }
+ 
+ 	start();
+@@ -3680,7 +3591,7 @@ void* AudioHardware::AudioSessionOutLPA::memBufferAlloc(int nSize, int32_t *ion_
+ 
+     alloc_data.len =   nSize;
+     alloc_data.align = 0x1000;
+-    alloc_data.flags = ION_HEAP(ION_AUDIO_HEAP_BL_ID);
++    alloc_data.flags = ION_HEAP(ION_AUDIO_HEAP_ID);
+     int rc = ioctl(ionfd, ION_IOC_ALLOC, &alloc_data);
+     if (rc) {
+         ALOGE("ION_IOC_ALLOC ioctl failed\n");
+@@ -3725,7 +3636,6 @@ void* AudioHardware::AudioSessionOutLPA::memBufferAlloc(int nSize, int32_t *ion_
+     // 3. Store this information for internal mapping / maintanence
+     BuffersAllocated buf(local_buf, ion_buf, nSize, fd_data.fd, alloc_data.handle);
+     mEmptyQueue.push_back(buf);
+-    mBufPool.push_back(buf);
+ 
+     // 4. Send the mem fd information
+     *ion_fd = fd_data.fd;
+@@ -3791,11 +3701,6 @@ void AudioHardware::AudioSessionOutLPA::bufferDeAlloc()
+         mFilledQueue.erase(it);
+     }
+     mFilledQueueMutex.unlock();
+-    while (!mBufPool.empty()) {
+-        List<BuffersAllocated>::iterator it = mBufPool.begin();
+-        ALOGE("Removing input buffer from Buffer Pool ");
+-        mBufPool.erase(it);
+-    }
+     if (ionfd >= 0) {
+         close(ionfd);
+         ionfd = -1;
+@@ -3804,7 +3709,8 @@ void AudioHardware::AudioSessionOutLPA::bufferDeAlloc()
+ 
+ uint32_t AudioHardware::AudioSessionOutLPA::latency() const
+ {
+-    return 54; //latency equal to regular hpcm session
++    // Android wants latency in milliseconds.
++    return 1000;//TODO to correct the value
+ }
+ 
+ void AudioHardware::AudioSessionOutLPA::requestAndWaitForEventThreadExit()
+@@ -3852,11 +3758,11 @@ void  AudioHardware::AudioSessionOutLPA::eventThreadEntry()
+         switch ( cur_pcmdec_event.event_type ) {
+         case AUDIO_EVENT_WRITE_DONE:
+             {
+-                Mutex::Autolock autoLock(mLock);
+                 ALOGE("WRITE_DONE: addr %p len %d and fd is %d\n",
+                      cur_pcmdec_event.event_payload.aio_buf.buf_addr,
+                      cur_pcmdec_event.event_payload.aio_buf.data_len,
+                      (int32_t) cur_pcmdec_event.event_payload.aio_buf.private_data);
++                Mutex::Autolock autoLock(mLock);
+                 mFilledQueueMutex.lock();
+                 BuffersAllocated buf = *(mFilledQueue.begin());
+                 for (List<BuffersAllocated>::iterator it = mFilledQueue.begin();
+@@ -3876,11 +3782,6 @@ void  AudioHardware::AudioSessionOutLPA::eventThreadEntry()
+                             ALOGV("Posting the EOS to the observer player %p", mObserver);
+                             mEosEventReceived = true;
+                             if (mObserver != NULL) {
+-                                mLock.unlock();
+-                                if (fsync(afd) != 0) {
+-                                    ALOGE("fsync failed.");
+-                                }
+-                                mLock.lock();
+                                 ALOGV("mObserver: posting EOS");
+                                 mObserver->postEOS(0);
+                             }
+@@ -4011,20 +3912,18 @@ status_t AudioHardware::AudioSessionOutLPA::drain()
+ 
+ status_t AudioHardware::AudioSessionOutLPA::flush()
+ {
+-    Mutex::Autolock autoLock(mLock);
+     ALOGV("LPA playback flush ");
+     int err;
+ 
++    // 2.) Add all the available buffers to Empty Queue (Maintain order)
+     mFilledQueueMutex.lock();
+     mEmptyQueueMutex.lock();
+-    // 1.) Clear the Empty and Filled buffer queue
+-    mEmptyQueue.clear();
+-    mFilledQueue.clear();
+-    // 2.) Add all the available buffers to Empty Queue (Maintain order)
+-    List<BuffersAllocated>::iterator it = mBufPool.begin();
+-    for (; it!=mBufPool.end(); ++it) {
+-        memset(it->memBuf, 0x0, (*it).memBufsize);
+-        mEmptyQueue.push_back(*it);
++    while (!mFilledQueue.empty()) {
++        List<BuffersAllocated>::iterator it = mFilledQueue.begin();
++        BuffersAllocated buf = *it;
++        buf.bytesToWrite = 0;
++        mEmptyQueue.push_back(buf);
++        mFilledQueue.erase(it);
+     }
+     mEmptyQueueMutex.unlock();
+     mFilledQueueMutex.unlock();
+@@ -4098,7 +3997,6 @@ void AudioHardware::AudioSessionOutLPA::reset()
+     status_t status = NO_ERROR;
+     bufferDeAlloc();
+     ::close(afd);
+-    lpa_playback_in_progress = false;
+     ALOGD("AudioSessionOutLPA::reset() complete");
+ }
+ 
+@@ -4108,11 +4006,6 @@ status_t AudioHardware::AudioSessionOutLPA::getRenderPosition(uint32_t *dspFrame
+     return INVALID_OPERATION;
+ }
+ 
+-status_t AudioHardware::AudioSessionOutLPA::getPresentationPosition(uint64_t *frames, struct timespec *timestamp)
+-{
+-    //TODO: enable when supported by driver
+-    return INVALID_OPERATION;
+-}
+ 
+ status_t AudioHardware::AudioSessionOutLPA::getBufferInfo(buf_info **buf) {
+ 
+@@ -4121,7 +4014,7 @@ status_t AudioHardware::AudioSessionOutLPA::getBufferInfo(buf_info **buf) {
+     tempbuf->bufsize = LPA_BUFFER_SIZE;
+     tempbuf->nBufs = mInputBufferCount;
+     tempbuf->buffers = (int **)((char*)tempbuf + sizeof(buf_info));
+-    List<BuffersAllocated>::iterator it = mBufPool.begin();
++    List<BuffersAllocated>::iterator it = mEmptyQueue.begin();
+     for (int i = 0; i < mInputBufferCount; i++) {
+         tempbuf->buffers[i] = (int *)it->memBuf;
+         it++;
+@@ -4142,18 +4035,16 @@ status_t AudioHardware::AudioSessionOutLPA::isBufferAvailable(int *isAvail) {
+         ALOGV("Write: waiting on mWriteCv");
+         mLock.unlock();
+         mWriteCv.wait(mEmptyQueueMutex);
+-        mEmptyQueueMutex.unlock();
+         mLock.lock();
+         if (mSkipWrite) {
+             ALOGV("Write: Flushing the previous write buffer");
+             mSkipWrite = false;
++            mEmptyQueueMutex.unlock();
+             return NO_ERROR;
+         }
+         ALOGV("Write: received a signal to wake up");
+-    } else {
+-        ALOGV("Buffer available in empty queue");
+-        mEmptyQueueMutex.unlock();
+     }
++    mEmptyQueueMutex.unlock();
+ 
+     *isAvail = true;
+     return NO_ERROR;
+@@ -4212,7 +4103,7 @@ ssize_t AudioHardware::AudioStreamInMSM72xx::read( void* buffer, ssize_t bytes)
+ 
+     // Resetting the bytes value, to return the appropriate read value
+     bytes = 0;
+-    if (mFormat == AUDIO_FORMAT_AAC)
++    if (mFormat == AudioSystem::AAC)
+     {
+         *((uint32_t*)recogPtr) = 0x51434F4D ;// ('Q','C','O', 'M') Number to identify format as AAC by higher layers
+         recogPtr++;
+@@ -4223,7 +4114,7 @@ ssize_t AudioHardware::AudioStreamInMSM72xx::read( void* buffer, ssize_t bytes)
+     }
+     while (count > 0) {
+ 
+-        if (mFormat == AUDIO_FORMAT_AAC) {
++        if (mFormat == AudioSystem::AAC) {
+             frameSizePtr = (uint16_t *)p;
+             p += sizeof(uint16_t);
+             if(!(count > 2)) break;
+@@ -4236,7 +4127,7 @@ ssize_t AudioHardware::AudioStreamInMSM72xx::read( void* buffer, ssize_t bytes)
+             p += bytesRead;
+             bytes += bytesRead;
+ 
+-            if (mFormat == AUDIO_FORMAT_AAC){
++            if (mFormat == AudioSystem::AAC){
+                 *frameSizePtr =  bytesRead;
+                 (*frameCountPtr)++;
+             }
+@@ -4258,7 +4149,7 @@ ssize_t AudioHardware::AudioStreamInMSM72xx::read( void* buffer, ssize_t bytes)
+             ALOGW("EAGAIN - retrying");
+         }
+     }
+-    if (mFormat == AUDIO_FORMAT_AAC)
++    if (mFormat == AudioSystem::AAC)
+          return aac_framesize;
+ 
+     return bytes;
+diff --git a/audio/AudioHardware.h b/audio/AudioHardware.h
+index 1fe95a9..8921b51 100644
+--- a/audio/AudioHardware.h
++++ b/audio/AudioHardware.h
+@@ -1,6 +1,6 @@
+ /*
+ ** Copyright 2008, The Android Open-Source Project
+-** Copyright (c) 2011-2012, The Linux Foundation. All rights reserved.
++** Copyright (c) 2011-2012, Code Aurora Forum. All rights reserved.
+ **
+ ** Licensed under the Apache License, Version 2.0 (the "License");
+ ** you may not use this file except in compliance with the License.
+@@ -69,8 +69,8 @@ using android::Condition;
+ #define MBADRC_DISABLE 0xFFEF
+ #define SRS_ENABLE 0x0020
+ #define SRS_DISABLE 0xFFDF
+-#define LPA_BUFFER_SIZE 480*1024
+-#define BUFFER_COUNT 2
++#define LPA_BUFFER_SIZE 256*1024
++#define BUFFER_COUNT 4
+ 
+ #define AGC_ENABLE     0x0001
+ #define NS_ENABLE      0x0002
+@@ -165,7 +165,7 @@ enum tty_modes {
+ #define AUDIO_HW_IN_SAMPLERATE 8000                 // Default audio input sample rate
+ #define AUDIO_HW_IN_CHANNELS (AudioSystem::CHANNEL_IN_MONO) // Default audio input channel mask
+ #define AUDIO_HW_IN_BUFFERSIZE 2048                 // Default audio input buffer size
+-#define AUDIO_HW_IN_FORMAT (AUDIO_FORMAT_PCM_16_BIT)  // Default audio input sample format
++#define AUDIO_HW_IN_FORMAT (AudioSystem::PCM_16_BIT)  // Default audio input sample format
+ #ifdef QCOM_VOIP_ENABLED
+ #define AUDIO_HW_VOIP_BUFFERSIZE_8K 320
+ #define AUDIO_HW_VOIP_BUFFERSIZE_16K 640
+@@ -208,30 +208,10 @@ public:
+     virtual status_t    setParameters(const String8& keyValuePairs);
+     virtual String8     getParameters(const String8& keys);
+ 
+-    virtual status_t setMasterMute(bool muted);
+-
+-    virtual int createAudioPatch(unsigned int num_sources,
+-                                 const struct audio_port_config *sources,
+-                                 unsigned int num_sinks,
+-                                 const struct audio_port_config *sinks,
+-                                 audio_patch_handle_t *handle);
+-
+-    virtual int releaseAudioPatch(audio_patch_handle_t handle);
+-
+-    virtual int getAudioPort(struct audio_port *port);
+-
+-    virtual int setAudioPortConfig(const struct audio_port_config *config);
+-
+     // create I/O streams
+     virtual AudioStreamOut* openOutputStream(
+                                 uint32_t devices,
+-                                int *format=0,
+-                                uint32_t *channels=0,
+-                                uint32_t *sampleRate=0,
+-                                status_t *status=0);
+-    virtual AudioStreamOut* openOutputStreamWithFlags(
+-                                uint32_t devices,
+-                                audio_output_flags_t flags=(audio_output_flags_t)0,
++                                //audio_output_flags_t flags,
+                                 int *format=0,
+                                 uint32_t *channels=0,
+                                 uint32_t *sampleRate=0,
+@@ -258,7 +238,7 @@ public:
+ #endif
+ protected:
+     virtual status_t    dump(int fd, const Vector<String16>& args);
+-    uint32_t getMvsMode(int format, int rate);
++    uint32_t getMvsMode(int format);
+     uint32_t getMvsRateType(uint32_t MvsMode, uint32_t *rateType);
+     status_t setupDeviceforVoipCall(bool value);
+ 
+@@ -270,7 +250,7 @@ private:
+     status_t    dumpInternals(int fd, const Vector<String16>& args);
+     uint32_t    getInputSampleRate(uint32_t sampleRate);
+     bool        checkOutputStandby();
+-    status_t    doRouting(AudioStreamInMSM72xx *input, int outputDevice = 0);
++    status_t    doRouting(AudioStreamInMSM72xx *input);
+ #ifdef QCOM_FM_ENABLED
+     status_t    enableFM();
+     status_t    disableFM();
+@@ -294,7 +274,7 @@ private:
+         // must be 32-bit aligned
+         virtual size_t bufferSize() const { return 5248; }
+         virtual uint32_t    channels() const { return AudioSystem::CHANNEL_OUT_STEREO; }
+-        virtual int         format() const { return AUDIO_FORMAT_PCM_16_BIT; }
++        virtual int         format() const { return AudioSystem::PCM_16_BIT; }
+         virtual uint32_t    latency() const { return (1000*AUDIO_HW_NUM_OUT_BUF*(bufferSize()/frameSize()))/sampleRate()+AUDIO_HW_OUT_LATENCY_MS; }
+         virtual status_t    setVolume(float left, float right) { return INVALID_OPERATION; }
+         virtual ssize_t     write(const void* buffer, size_t bytes);
+@@ -306,8 +286,6 @@ private:
+                 uint32_t    devices() { return mDevices; }
+         virtual status_t    getRenderPosition(uint32_t *dspFrames);
+ 
+-        virtual status_t    getPresentationPosition(uint64_t *frames, struct timespec *timestamp);
+-
+     private:
+                 AudioHardware* mHardware;
+                 int         mFd;
+@@ -330,7 +308,7 @@ private:
+         // must be 32-bit aligned - driver only seems to like 4800
+         virtual size_t      bufferSize() const { ALOGD(" AudioStreamOutDirect: bufferSize\n"); return 320; }
+         virtual uint32_t    channels() const {ALOGD(" AudioStreamOutDirect: channels %d\n",mChannels); return mChannels; }
+-        virtual int         format() const {ALOGD(" AudioStreamOutDirect: format\n"); return AUDIO_FORMAT_PCM_16_BIT; }
++        virtual int         format() const {ALOGD(" AudioStreamOutDirect: format\n"); return AudioSystem::PCM_16_BIT; }
+         virtual uint32_t    latency() const { return (1000*AUDIO_HW_NUM_OUT_BUF*(bufferSize()/frameSize()))/sampleRate()+AUDIO_HW_OUT_LATENCY_MS; }
+         virtual status_t    setVolume(float left, float right) { return INVALID_OPERATION; }
+         virtual ssize_t     write(const void* buffer, size_t bytes);
+@@ -342,8 +320,6 @@ private:
+                 uint32_t    devices() { return mDevices; }
+         virtual status_t    getRenderPosition(uint32_t *dspFrames);
+ 
+-        virtual status_t    getPresentationPosition(uint64_t *frames, struct timespec *timestamp);
+-
+     private:
+                 AudioHardware* mHardware;
+                 int         mFd;
+@@ -420,8 +396,6 @@ public:
+     virtual status_t    getBufferInfo(buf_info **buf);
+     virtual status_t    isBufferAvailable(int *isAvail);
+ 
+-    virtual status_t    getPresentationPosition(uint64_t *frames, struct timespec *timestamp);
+-
+     void* memBufferAlloc(int nSize, int32_t *ion_fd);
+ 
+ private:
+@@ -580,7 +554,6 @@ private:
+         virtual unsigned int  getInputFramesLost() const { return 0; }
+                 uint32_t    devices() { return mDevices; }
+                 int         state() const { return mState; }
+-                bool        mSetupDevice;
+ 
+     private:
+                 AudioHardware* mHardware;
+@@ -634,7 +607,6 @@ private:
+             bool mVoipInActive;
+             bool mVoipOutActive;
+             Mutex       mVoipLock;
+-            int mDirectOutrefCnt;
+ #endif /*QCOM_VOIP_ENABLED*/
+      friend class AudioStreamInMSM72xx;
+             Mutex       mLock;
+diff --git a/audio/AudioHardware_cad.cpp b/audio/AudioHardware_cad.cpp
+index e43b788..7740a27 100644
+--- a/audio/AudioHardware_cad.cpp
++++ b/audio/AudioHardware_cad.cpp
+@@ -1,5 +1,5 @@
+ /*
+-** Copyright (c) 2011-2013, The Linux Foundation. All rights reserved.
++** Copyright (c) 2011-2012, Code Aurora Forum. All rights reserved.
+ ** Not a Contribution, Apache license notifications and license are retained
+ ** for attribution purposes only.
+ ** Copyright 2008, The Android Open-Source Project
+@@ -44,6 +44,7 @@ extern "C" {
+ #endif
+ //#include <media/AudioRecord.h>
+ 
++
+ #define COMBO_DEVICE_SUPPORTED // Headset speaker combo device supported on this target
+ #define DUALMIC_KEY "dualmic_enabled"
+ #define TTY_MODE_KEY "tty_mode"
+@@ -203,8 +204,7 @@ AudioHardware::AudioHardware() :
+     ,mFmFd(-1),FmA2dpStatus(-1)
+ #endif
+ #ifdef QCOM_VOIP_ENABLED
+-,mVoipFd(-1), mVoipInActive(false), mVoipOutActive(false), mDirectOutput(0), mVoipBitRate(0),
+-mDirectOutrefCnt(0)
++,mVoipFd(-1), mVoipInActive(false), mVoipOutActive(false), mDirectOutput(0), mVoipBitRate(0)
+ #endif /*QCOM_VOIP_ENABLED*/
+ {
+     m7xsnddriverfd = open("/dev/msm_cad", O_RDWR);
+@@ -314,17 +314,6 @@ status_t AudioHardware::initCheck()
+     return mInit ? NO_ERROR : NO_INIT;
+ }
+ 
+-// default implementation calls its "without flags" counterpart
+-AudioStreamOut* AudioHardware::openOutputStreamWithFlags(uint32_t devices,
+-                                          audio_output_flags_t flags,
+-                                          int *format,
+-                                          uint32_t *channels,
+-                                          uint32_t *sampleRate,
+-                                          status_t *status)
+-{
+-    return openOutputStream(devices, format, channels, sampleRate, status);
+-}
+-
+ AudioStreamOut* AudioHardware::openOutputStream(uint32_t devices, int *format, uint32_t *channels,
+         uint32_t *sampleRate, status_t *status)
+ {
+@@ -358,11 +347,6 @@ AudioStreamOut* AudioHardware::openOutputStream(uint32_t devices, int *format, u
+                 }
+                 if (lStatus == NO_ERROR) {
+                     mDirectOutput = out;
+-                    mDirectOutrefCnt++;
+-                    mLock.unlock();
+-                    if (mVoipInActive)
+-                        setupDeviceforVoipCall(true);
+-                    mLock.lock();
+                     ALOGV(" \n set sucessful for AudioStreamOutDirect");
+                 } else {
+                     ALOGE(" \n set Failed for AudioStreamOutDirect");
+@@ -370,8 +354,7 @@ AudioStreamOut* AudioHardware::openOutputStream(uint32_t devices, int *format, u
+                 }
+             }
+             else {
+-                mDirectOutrefCnt++;
+-                ALOGE(" \n AudioHardware::AudioStreamOutDirect is already open refCnt %d", mDirectOutrefCnt);
++                ALOGE(" \n AudioHardware::AudioStreamOutDirect is already open");
+             }
+             return mDirectOutput;
+         }
+@@ -446,12 +429,9 @@ void AudioHardware::closeOutputStream(AudioStreamOut* out) {
+     }
+ #ifdef QCOM_VOIP_ENABLED
+     else if (mDirectOutput == out) {
+-        mDirectOutrefCnt--;
+-        if (mDirectOutrefCnt <= 0) {
+-            ALOGV(" deleting mDirectOutput \n");
+-            delete mDirectOutput;
+-            mDirectOutput = 0;
+-        }
++        ALOGV(" deleting  mDirectOutput \n");
++        delete mDirectOutput;
++        mDirectOutput = 0;
+     }
+ #endif /*QCOM_VOIP_ENABLED*/
+     else if (mOutputLPA == out) {
+@@ -491,21 +471,18 @@ AudioStreamIn* AudioHardware::openInputStream(
+         }
+         mVoipInputs.add(inVoip);
+         mLock.unlock();
+-        if (mVoipOutActive) {
+-            inVoip->mSetupDevice = true;
+-            setupDeviceforVoipCall(true);
+-        }
+         return inVoip;
+     } else
+ #endif /*QCOM_VOIP_ENABLED*/
+     {
+-        if ( (mMode == AudioSystem::MODE_IN_CALL) &&
++	
++	   if ( (mMode == AudioSystem::MODE_IN_CALL) &&
+             (getInputSampleRate(*sampleRate) > AUDIO_HW_IN_SAMPLERATE) &&
+             (*format == AUDIO_HW_IN_FORMAT) )
+         {
+               ALOGE("PCM recording, in a voice call, with sample rate more than 8K not supported \
+                    re-configure with 8K and try software re-sampler ");
+-              *status = -EINVAL;
++              *status = UNKNOWN_ERROR ;
+               *sampleRate = AUDIO_HW_IN_SAMPLERATE;
+               mLock.unlock();
+               return 0;
+@@ -727,31 +704,25 @@ status_t AudioHardware::setParameters(const String8& keyValuePairs)
+ }
+ #ifdef QCOM_VOIP_ENABLED
+ 
+-uint32_t AudioHardware::getMvsMode(int format, int rate)
++uint32_t AudioHardware::getMvsMode(int format)
+ {
+     switch(format) {
+-    case AUDIO_FORMAT_PCM_16_BIT:
+-        if(rate == AUDIO_HW_VOIP_SAMPLERATE_8K) {
+-            return MVS_MODE_PCM;
+-        } else if(rate== AUDIO_HW_VOIP_SAMPLERATE_16K) {
+-            return MVS_MODE_PCM_WB;
+-        } else {
+-            return MVS_MODE_PCM;
+-        }
++    case AudioSystem::PCM_16_BIT:
++        return MVS_MODE_PCM;
+         break;
+-    case AUDIO_FORMAT_AMR_NB:
++    case AudioSystem::AMR_NB:
+         return MVS_MODE_AMR;
+         break;
+-    case AUDIO_FORMAT_AMR_WB:
++    case AudioSystem::AMR_WB:
+         return MVS_MODE_AMR_WB;
+         break;
+-    case AUDIO_FORMAT_EVRC:
++    case AudioSystem::EVRC:
+         return   MVS_MODE_IS127;
+         break;
+-    case AUDIO_FORMAT_EVRCB:
++    case AudioSystem::EVRCB:
+         return MVS_MODE_4GV_NB;
+         break;
+-    case AUDIO_FORMAT_EVRCWB:
++    case AudioSystem::EVRCWB:
+         return MVS_MODE_4GV_WB;
+         break;
+     default:
+@@ -864,32 +835,6 @@ uint32_t AudioHardware::getMvsRateType(uint32_t mvsMode, uint32_t *rateType)
+     return ret;
+ }
+ #endif /*QCOM_VOIP_ENABLED*/
+-
+-status_t AudioHardware::setMasterMute(bool muted) {
+-    return INVALID_OPERATION;
+-}
+-
+-int AudioHardware::createAudioPatch(unsigned int num_sources,
+-        const struct audio_port_config *sources,
+-        unsigned int num_sinks,
+-        const struct audio_port_config *sinks,
+-        audio_patch_handle_t *handle) {
+-    return INVALID_OPERATION;
+-}
+-
+-int AudioHardware::releaseAudioPatch(audio_patch_handle_t handle) {
+-    return INVALID_OPERATION;
+-}
+-
+-int AudioHardware::getAudioPort(struct audio_port *port) {
+-    return INVALID_OPERATION;
+-}
+-
+-int AudioHardware::setAudioPortConfig(
+-        const struct audio_port_config *config) {
+-    return INVALID_OPERATION;
+-}
+-
+ String8 AudioHardware::getParameters(const String8& keys)
+ {
+     AudioParameter param = AudioParameter(keys);
+@@ -921,7 +866,8 @@ String8 AudioHardware::getParameters(const String8& keys)
+         value = String8("yes");
+         param.add(key, value);
+     }
+-    key = String8(AUDIO_PARAMETER_KEY_FLUENCE_TYPE);
++
++    key = String8(AudioParameter::keyFluenceType);
+     if (param.get(key, value) == NO_ERROR) {
+        if (mDualMicEnabled) {
+             value = String8("fluence");
+@@ -931,6 +877,7 @@ String8 AudioHardware::getParameters(const String8& keys)
+             param.add(key, value);
+        }
+     }
++
+     ALOGV("AudioHardware::getParameters() %s", param.toString().string());
+     return param.toString();
+ }
+@@ -985,14 +932,14 @@ size_t AudioHardware::getInputBufferSize(uint32_t sampleRate, int format, int ch
+ {
+     ALOGD("AudioHardware::getInputBufferSize sampleRate %d format %d channelCount %d"
+             ,sampleRate, format, channelCount);
+-    if ( (format != AUDIO_FORMAT_PCM_16_BIT) &&
+-         (format != AUDIO_FORMAT_AMR_NB)     &&
+-         (format != AUDIO_FORMAT_AMR_WB)     &&
+-         (format != AUDIO_FORMAT_EVRC)       &&
+-         (format != AUDIO_FORMAT_EVRCB)      &&
+-         (format != AUDIO_FORMAT_EVRCWB)     &&
+-         (format != AUDIO_FORMAT_QCELP)      &&
+-         (format != AUDIO_FORMAT_AAC)){
++    if ( (format != AudioSystem::PCM_16_BIT) &&
++         (format != AudioSystem::AMR_NB)     &&
++         (format != AudioSystem::AMR_WB)     &&
++         (format != AudioSystem::EVRC)       &&
++         (format != AudioSystem::EVRCB)      &&
++         (format != AudioSystem::EVRCWB)     &&
++         (format != AudioSystem::QCELP)      &&
++         (format != AudioSystem::AAC)){
+         ALOGW("getInputBufferSize bad format: 0x%x", format);
+         return 0;
+     }
+@@ -1001,13 +948,13 @@ size_t AudioHardware::getInputBufferSize(uint32_t sampleRate, int format, int ch
+         return 0;
+     }
+ 
+-    if(format == AUDIO_FORMAT_AMR_NB)
++    if(format == AudioSystem::AMR_NB)
+        return 320*channelCount;
+-    else if (format == AUDIO_FORMAT_EVRC)
++    else if (format == AudioSystem::EVRC)
+        return 230*channelCount;
+-    else if (format == AUDIO_FORMAT_QCELP)
++    else if (format == AudioSystem::QCELP)
+        return 350*channelCount;
+-    else if (format == AUDIO_FORMAT_AAC)
++    else if (format == AudioSystem::AAC)
+        return 2048;
+ #ifdef QCOM_VOIP_ENABLED
+     else if (sampleRate == AUDIO_HW_VOIP_SAMPLERATE_8K)
+@@ -1178,7 +1125,7 @@ static status_t do_route_audio_rpc(uint32_t device,
+     }
+     else if(device == SND_DEVICE_IN_S_SADC_OUT_HANDSET) {
+         args.device.rx_device = CAD_HW_DEVICE_ID_HANDSET_SPKR;
+-	args.device.tx_device = CAD_HW_DEVICE_ID_HANDSET_MIC_ENDFIRE;
++	    args.device.tx_device = CAD_HW_DEVICE_ID_HANDSET_MIC_ENDFIRE;
+         ALOGV("In DUALMIC_HANDSET");
+     }
+     else if(device == SND_DEVICE_IN_S_SADC_OUT_SPEAKER_PHONE) {
+@@ -1222,7 +1169,7 @@ static status_t do_route_audio_rpc(uint32_t device,
+         ALOGV("In SND_DEVICE_FM_ANALOG_STEREO_HEADSET_CODEC");
+     }
+     else if(device == SND_DEVICE_FM_ANALOG_STEREO_HEADSET) {
+-	args.device.pathtype = CAD_DEVICE_PATH_LB;
++	    args.device.pathtype = CAD_DEVICE_PATH_LB;
+         args.device.rx_device = CAD_HW_DEVICE_ID_LP_FM_HEADSET_SPKR_STEREO_RX;
+         args.device.tx_device = CAD_HW_DEVICE_ID_NONE;
+         ALOGV("In SND_DEVICE_FM_ANALOG_STEREO_HEADSET");
+@@ -1354,23 +1301,18 @@ bool AudioHardware::isFMAnalog()
+     return isAfm;
+ }
+ #endif
+-status_t AudioHardware::doRouting(AudioStreamInMSM72xx *input, int outputDevice)
++status_t AudioHardware::doRouting(AudioStreamInMSM72xx *input)
+ {
+     /* currently this code doesn't work without the htc libacoustic */
+ 
+     Mutex::Autolock lock(mLock);
+-    uint32_t outputDevices;
++    uint32_t outputDevices = mOutput->devices();
+     status_t ret = NO_ERROR;
+     int new_snd_device = -1;
+ #ifdef QCOM_FM_ENABLED
+     bool enableDgtlFmDriver = false;
+ #endif
+ 
+-    if (outputDevice)
+-        outputDevices = outputDevice;
+-    else
+-        outputDevices = mOutput->devices();
+-
+     //int (*msm72xx_enable_audpp)(int);
+     //msm72xx_enable_audpp = (int (*)(int))::dlsym(acoustic, "msm72xx_enable_audpp");
+ 
+@@ -1459,6 +1401,17 @@ status_t AudioHardware::doRouting(AudioStreamInMSM72xx *input, int outputDevice)
+                 new_snd_device = SND_DEVICE_FM_ANALOG_STEREO_HEADSET_CODEC;
+                 enableDgtlFmDriver = false;
+             }
++          } else if ((outputDevices & AudioSystem::DEVICE_OUT_WIRED_HEADSET) &&
++                    (outputDevices & AudioSystem::DEVICE_OUT_FM)) {
++            if( !isFMAnalog() ){
++                ALOGI("Routing FM to Wired Headset\n");
++                new_snd_device = SND_DEVICE_FM_DIGITAL_STEREO_HEADSET;
++                enableDgtlFmDriver = true;
++            } else{
++                ALOGW("Enabling Anlg FM + codec device\n");
++                new_snd_device = SND_DEVICE_FM_ANALOG_STEREO_HEADSET_CODEC;
++                enableDgtlFmDriver = false;
++            }
+         } else if ((outputDevices & AudioSystem::DEVICE_OUT_SPEAKER) &&
+                    (outputDevices & AudioSystem::DEVICE_OUT_FM)) {
+             ALOGI("Routing FM to Speakerphone\n");
+@@ -1648,18 +1601,12 @@ AudioHardware::AudioStreamInMSM72xx *AudioHardware::getActiveInput_l()
+ 
+     return NULL;
+ }
+-
+ #ifdef QCOM_VOIP_ENABLED
+ status_t AudioHardware::setupDeviceforVoipCall(bool value)
+ {
+-    ALOGV("setupDeviceforVoipCall value %d",value);
+-    if (mMode == AudioSystem::MODE_IN_CALL && value == false) {
+-        ALOGE("mode already set for voice call, do not change to normal");
+-        return NO_ERROR;
+-    }
+ 
+     int mode = (value ? AudioSystem::MODE_IN_COMMUNICATION : AudioSystem::MODE_NORMAL);
+-    if (setMode(mode) == BAD_VALUE) {
++    if (setMode(mode) != NO_ERROR) {
+         ALOGV("setMode fails");
+         return UNKNOWN_ERROR;
+     }
+@@ -1686,7 +1633,7 @@ AudioHardware::AudioStreamInVoip::AudioStreamInVoip() :
+     mHardware(0), mFd(-1), mState(AUDIO_INPUT_CLOSED), mRetryCount(0),
+     mFormat(AUDIO_HW_IN_FORMAT), mChannels(AUDIO_HW_IN_CHANNELS),
+     mSampleRate(AUDIO_HW_VOIP_SAMPLERATE_8K), mBufferSize(AUDIO_HW_VOIP_BUFFERSIZE_8K),
+-    mAcoustics((AudioSystem::audio_in_acoustics)0), mDevices(0), mSetupDevice(false)
++    mAcoustics((AudioSystem::audio_in_acoustics)0), mDevices(0)
+ {
+ }
+ 
+@@ -1697,12 +1644,12 @@ status_t AudioHardware::AudioStreamInVoip::set(
+ {
+     ALOGD("AudioStreamInVoip::set devices = %u format = %x pChannels = %u Rate = %u \n",
+          devices, *pFormat, *pChannels, *pRate);
+-    if ((pFormat == 0) || BAD_INDEX == hw->getMvsMode(*pFormat, *pRate)) {
++    if ((pFormat == 0) || BAD_INDEX == hw->getMvsMode(*pFormat)) {
+         ALOGE("Audio Format (%x) not supported \n",*pFormat);
+         return BAD_VALUE;
+     }
+ 
+-    if (*pFormat == AUDIO_FORMAT_PCM_16_BIT){
++    if (*pFormat == AudioSystem::PCM_16_BIT){
+     if (pRate == 0) {
+         return BAD_VALUE;
+     }
+@@ -1760,7 +1707,7 @@ status_t AudioHardware::AudioStreamInVoip::set(
+            goto Error;
+         }
+ 
+-        mvs_config.mvs_mode = mHardware->getMvsMode(*pFormat, *pRate);
++        mvs_config.mvs_mode = mHardware->getMvsMode(*pFormat);
+         status = mHardware->getMvsRateType(mvs_config.mvs_mode ,&mvs_config.rate_type);
+         ALOGD("set mvs config mode %d rate_type %d", mvs_config.mvs_mode, mvs_config.rate_type);
+         if (status < 0) {
+@@ -1802,6 +1749,9 @@ status_t AudioHardware::AudioStreamInVoip::set(
+ 
+     mHardware->mVoipInActive = true;
+ 
++    if (mHardware->mVoipOutActive)
++        mHardware->setupDeviceforVoipCall(true);
++
+     if (!acoustic)
+         return NO_ERROR;
+ 
+@@ -1835,7 +1785,7 @@ ssize_t AudioHardware::AudioStreamInVoip::read( void* buffer, ssize_t bytes)
+     size_t count = bytes;
+     size_t totalBytesRead = 0;
+ 
+-    if ((mState < AUDIO_INPUT_OPENED) || (mHardware->mVoipFd == -1)) {
++    if (mState < AUDIO_INPUT_OPENED) {
+        ALOGE(" reopen the device \n");
+         AudioHardware *hw = mHardware;
+         hw->mLock.lock();
+@@ -1856,13 +1806,9 @@ ssize_t AudioHardware::AudioStreamInVoip::read( void* buffer, ssize_t bytes)
+       return 0;
+     }
+ 
+-    if (!mSetupDevice) {
+-        mSetupDevice = true;
+-        mHardware->setupDeviceforVoipCall(true);
+-    }
+     struct msm_audio_mvs_frame audio_mvs_frame;
+     memset(&audio_mvs_frame, 0, sizeof(audio_mvs_frame));
+-    if(mFormat == AUDIO_FORMAT_PCM_16_BIT) {
++    if(mFormat == AudioSystem::PCM_16_BIT) {
+     audio_mvs_frame.frame_type = 0;
+        while (count >= mBufferSize) {
+            audio_mvs_frame.len = mBufferSize;
+@@ -1911,7 +1857,6 @@ status_t AudioHardware::AudioStreamInVoip::standby()
+             ALOGD("MVS stop returned %d %d %d\n", ret, __LINE__, mHardware->mVoipFd);
+             ::close(mFd);
+             mFd = mHardware->mVoipFd = -1;
+-            mSetupDevice = false;
+             mHardware->setupDeviceforVoipCall(false);
+             ALOGD("MVS driver closed %d mFd %d", __LINE__, mHardware->mVoipFd);
+         }
+@@ -2205,13 +2150,13 @@ status_t AudioHardware::AudioStreamOutMSM72xx::setParameters(const String8& keyV
+ 
+ #ifdef QCOM_FM_ENABLED
+     float fm_volume;
+-    key = String8(AUDIO_PARAMETER_KEY_FM_VOLUME);
++    key = String8(AudioParameter::keyFmVolume);
+     if (param.getFloat(key, fm_volume) == NO_ERROR) {
+         mHardware->setFmVolume(fm_volume);
+         param.remove(key);
+     }
+ 
+-    key = String8(AUDIO_PARAMETER_KEY_HANDLE_FM);
++    key = String8(AudioParameter::keyHandleFm);
+     if (param.getInt(key, device) == NO_ERROR) {
+         if (device & AUDIO_DEVICE_OUT_FM)
+             mHardware->enableFM();
+@@ -2256,16 +2201,10 @@ status_t AudioHardware::AudioStreamOutMSM72xx::getRenderPosition(uint32_t *dspFr
+     return INVALID_OPERATION;
+ }
+ 
+-status_t AudioHardware::AudioStreamOutMSM72xx::getPresentationPosition(uint64_t *frames, struct timespec *timestamp)
+-{
+-    //TODO: enable when supported by driver
+-    return INVALID_OPERATION;
+-}
+-
+ #ifdef QCOM_VOIP_ENABLED
+ AudioHardware::AudioStreamOutDirect::AudioStreamOutDirect() :
+     mHardware(0), mFd(-1), mStartCount(0), mRetryCount(0), mStandby(true), mDevices(0),mChannels(AudioSystem::CHANNEL_OUT_MONO),
+-    mSampleRate(AUDIO_HW_VOIP_SAMPLERATE_8K), mBufferSize(AUDIO_HW_VOIP_BUFFERSIZE_8K), mFormat(AUDIO_FORMAT_PCM_16_BIT)
++    mSampleRate(AUDIO_HW_VOIP_SAMPLERATE_8K), mBufferSize(AUDIO_HW_VOIP_BUFFERSIZE_8K), mFormat(AudioSystem::PCM_16_BIT)
+ {
+ }
+ 
+@@ -2279,13 +2218,13 @@ status_t AudioHardware::AudioStreamOutDirect::set(
+     ALOGD("AudioStreamOutDirect::set  lFormat = %x lChannels= %u lRate = %u\n",
+         lFormat, lChannels, lRate );
+ 
+-    if ((pFormat == 0) || BAD_INDEX == hw->getMvsMode(*pFormat, lRate)) {
++    if ((pFormat == 0) || BAD_INDEX == hw->getMvsMode(*pFormat)) {
+         ALOGE("Audio Format (%x) not supported \n",*pFormat);
+         return BAD_VALUE;
+     }
+ 
+ 
+-    if (*pFormat == AUDIO_FORMAT_PCM_16_BIT){
++    if (*pFormat == AudioSystem::PCM_16_BIT){
+         // fix up defaults
+         if (lFormat == 0) lFormat = format();
+         if (lChannels == 0) lChannels = channels();
+@@ -2293,9 +2232,11 @@ status_t AudioHardware::AudioStreamOutDirect::set(
+ 
+         // check values
+         if ((lFormat != format()) ||
+-            (lChannels != channels())) {
++            (lChannels != channels()) ||
++            (lRate != sampleRate())) {
+             if (pFormat) *pFormat = format();
+             if (pChannels) *pChannels = channels();
++            if (pRate) *pRate = sampleRate();
+             ALOGE("  AudioStreamOutDirect::set return bad values\n");
+             return BAD_VALUE;
+         }
+@@ -2325,6 +2266,9 @@ status_t AudioHardware::AudioStreamOutDirect::set(
+     mDevices = devices;
+     mHardware->mVoipOutActive = true;
+ 
++    if (mHardware->mVoipInActive)
++        mHardware->setupDeviceforVoipCall(true);
++
+     return NO_ERROR;
+ }
+ 
+@@ -2370,7 +2314,7 @@ ssize_t AudioHardware::AudioStreamOutDirect::write(const void* buffer, size_t by
+                goto Error;
+             }
+ 
+-            mvs_config.mvs_mode = mHardware->getMvsMode(mFormat, mSampleRate);
++            mvs_config.mvs_mode = mHardware->getMvsMode(mFormat);
+             status = mHardware->getMvsRateType(mvs_config.mvs_mode ,&mvs_config.rate_type);
+             ALOGD("set mvs config mode %d rate_type %d", mvs_config.mvs_mode, mvs_config.rate_type);
+             if (status < 0) {
+@@ -2398,7 +2342,7 @@ ssize_t AudioHardware::AudioStreamOutDirect::write(const void* buffer, size_t by
+     }
+     struct msm_audio_mvs_frame audio_mvs_frame;
+     memset(&audio_mvs_frame, 0, sizeof(audio_mvs_frame));
+-    if (mFormat == AUDIO_FORMAT_PCM_16_BIT) {
++    if (mFormat == AudioSystem::PCM_16_BIT) {
+         audio_mvs_frame.frame_type = 0;
+         while (count) {
+             audio_mvs_frame.len = mBufferSize;
+@@ -2515,7 +2459,7 @@ status_t AudioHardware::AudioStreamOutDirect::setParameters(const String8& keyVa
+     if (param.getInt(key, device) == NO_ERROR) {
+         mDevices = device;
+         ALOGV("set output routing %x", mDevices);
+-        status = mHardware->doRouting(NULL, device);
++        status = mHardware->doRouting(NULL);
+         param.remove(key);
+     }
+ 
+@@ -2550,12 +2494,6 @@ status_t AudioHardware::AudioStreamOutDirect::getRenderPosition(uint32_t *dspFra
+     //TODO: enable when supported by driver
+     return INVALID_OPERATION;
+ }
+-
+-status_t AudioHardware::AudioStreamOutDirect::getPresentationPosition(uint64_t *frames, struct timespec *timestamp)
+-{
+-    //TODO: enable when supported by driver
+-    return INVALID_OPERATION;
+-}
+ #endif /*QCOM_VOIP_ENABLED*/
+ 
+ // End AudioStreamOutDirect
+@@ -2583,10 +2521,10 @@ status_t AudioHardware::AudioStreamInMSM72xx::set(
+ 
+     if ((pFormat == 0) ||
+         ((*pFormat != AUDIO_HW_IN_FORMAT) &&
+-         (*pFormat != AUDIO_FORMAT_AMR_NB) &&
+-         (*pFormat != AUDIO_FORMAT_EVRC) &&
+-         (*pFormat != AUDIO_FORMAT_QCELP) &&
+-         (*pFormat != AUDIO_FORMAT_AAC)))
++         (*pFormat != AudioSystem::AMR_NB) &&
++         (*pFormat != AudioSystem::EVRC) &&
++         (*pFormat != AudioSystem::QCELP) &&
++         (*pFormat != AudioSystem::AAC)))
+     {
+         *pFormat = AUDIO_HW_IN_FORMAT;
+         ALOGE("audio format bad value");
+@@ -2676,9 +2614,9 @@ status_t AudioHardware::AudioStreamInMSM72xx::set(
+     mSampleRate = config.sample_rate;
+     mBufferSize = config.buffer_size;
+     }
+-    else if( (*pFormat == AUDIO_FORMAT_AMR_NB) ||
+-             (*pFormat == AUDIO_FORMAT_EVRC) ||
+-             (*pFormat == AUDIO_FORMAT_QCELP))
++    else if( (*pFormat == AudioSystem::AMR_NB) ||
++             (*pFormat == AudioSystem::EVRC) ||
++             (*pFormat == AudioSystem::QCELP))
+            {
+ 
+       // open vocie memo input device
+@@ -2728,38 +2666,38 @@ status_t AudioHardware::AudioStreamInMSM72xx::set(
+ 
+       switch (*pFormat)
+       {
+-        case AUDIO_FORMAT_AMR_NB:
++        case AudioSystem::AMR_NB:
+         {
+           ALOGI("Recording Format: AMR_NB");
+           gcfg.capability = RPC_VOC_CAP_AMR; // RPC_VOC_CAP_AMR (64)
+           gcfg.max_rate = RPC_VOC_AMR_RATE_1220; // Max rate (Fixed frame)
+           gcfg.min_rate = RPC_VOC_AMR_RATE_1220; // Min rate (Fixed frame length)
+           gcfg.frame_format = RPC_VOC_PB_AMR; // RPC_VOC_PB_AMR
+-          mFormat = AUDIO_FORMAT_AMR_NB;
++          mFormat = AudioSystem::AMR_NB;
+           mBufferSize = 320;
+           break;
+         }
+ 
+-        case AUDIO_FORMAT_EVRC:
++        case AudioSystem::EVRC:
+         {
+           ALOGI("Recording Format: EVRC");
+           gcfg.capability = RPC_VOC_CAP_IS127;
+           gcfg.max_rate = RPC_VOC_1_RATE; // Max rate (Fixed frame)
+           gcfg.min_rate = RPC_VOC_1_RATE; // Min rate (Fixed frame length)
+           gcfg.frame_format = RPC_VOC_PB_NATIVE_QCP;
+-          mFormat = AUDIO_FORMAT_EVRC;
++          mFormat = AudioSystem::EVRC;
+           mBufferSize = 230;
+           break;
+         }
+ 
+-        case AUDIO_FORMAT_QCELP:
++        case AudioSystem::QCELP:
+         {
+           ALOGI("Recording Format: QCELP");
+           gcfg.capability = RPC_VOC_CAP_IS733; // RPC_VOC_CAP_AMR (64)
+           gcfg.max_rate = RPC_VOC_1_RATE; // Max rate (Fixed frame)
+           gcfg.min_rate = RPC_VOC_1_RATE; // Min rate (Fixed frame length)
+           gcfg.frame_format = RPC_VOC_PB_NATIVE_QCP;
+-          mFormat = AUDIO_FORMAT_QCELP;
++          mFormat = AudioSystem::QCELP;
+           mBufferSize = 350;
+           break;
+         }
+@@ -2794,7 +2732,7 @@ status_t AudioHardware::AudioStreamInMSM72xx::set(
+       ALOGV("After set dtx_enable = 0x%8x\n",gcfg.dtx_enable);
+       ALOGV("After set data_req_ms = 0x%8x\n",gcfg.data_req_ms);
+     }
+-    else if(*pFormat == AUDIO_FORMAT_AAC) {
++    else if(*pFormat == AudioSystem::AAC) {
+       // open AAC input device
+                status = ::open(PCM_IN_DEVICE, O_RDWR);
+                if (status < 0) {
+@@ -2924,7 +2862,7 @@ status_t AudioHardware::AudioSessionOutLPA::setParameters(const String8& keyValu
+     if (param.getInt(key, device) == NO_ERROR) {
+         mDevices = device;
+         ALOGV("set output routing %x", mDevices);
+-        status = mHardware->doRouting(NULL, device);
++        status = mHardware->doRouting(NULL);
+         param.remove(key);
+     }
+ 
+@@ -2960,13 +2898,15 @@ ssize_t AudioHardware::AudioSessionOutLPA::write(const void* buffer, size_t byte
+         if (bytes < LPA_BUFFER_SIZE)
+             bytes = 0;
+         else
+-            return UNKNOWN_ERROR;
++            return 0;
+     }
+ 
++    if (mSkipWrite)
++        mSkipWrite = false;
++
+     //2.) Dequeue the buffer from empty buffer queue. Copy the data to be
+     //    written into the buffer. Then Enqueue the buffer to the filled
+     //    buffer queue
+-    mEmptyQueueMutex.lock();
+     List<BuffersAllocated>::iterator it = mEmptyQueue.begin();
+     BuffersAllocated buf = *it;
+     mEmptyQueue.erase(it);
+@@ -3028,6 +2968,9 @@ ssize_t AudioHardware::AudioSessionOutLPA::write(const void* buffer, size_t byte
+ 
+     if (bytes < LPA_BUFFER_SIZE) {
+         ALOGV("Last buffer case");
++        if (fsync(afd) != 0) {
++            ALOGE("fsync failed.");
++        }
+         mReachedEOS = true;
+     }
+ 
+@@ -3131,7 +3074,7 @@ void* AudioHardware::AudioSessionOutLPA::memBufferAlloc(int nSize, int32_t *ion_
+ 
+     alloc_data.len =   nSize;
+     alloc_data.align = 0x1000;
+-    alloc_data.flags = ION_HEAP(ION_AUDIO_HEAP_BL_ID);
++    alloc_data.flags = ION_HEAP(ION_AUDIO_HEAP_ID);
+     int rc = ioctl(ionfd, ION_IOC_ALLOC, &alloc_data);
+     if (rc) {
+         ALOGE("ION_IOC_ALLOC ioctl failed\n");
+@@ -3176,7 +3119,6 @@ void* AudioHardware::AudioSessionOutLPA::memBufferAlloc(int nSize, int32_t *ion_
+     // 3. Store this information for internal mapping / maintanence
+     BuffersAllocated buf(local_buf, ion_buf, nSize, fd_data.fd, alloc_data.handle);
+     mEmptyQueue.push_back(buf);
+-    mBufPool.push_back(buf);
+ 
+     // 4. Send the mem fd information
+     *ion_fd = fd_data.fd;
+@@ -3242,11 +3184,6 @@ void AudioHardware::AudioSessionOutLPA::bufferDeAlloc()
+         mFilledQueue.erase(it);
+     }
+     mFilledQueueMutex.unlock();
+-    while (!mBufPool.empty()) {
+-        List<BuffersAllocated>::iterator it = mBufPool.begin();
+-        ALOGE("Removing input buffer from Buffer Pool ");
+-        mBufPool.erase(it);
+-    }
+     if (ionfd >= 0) {
+         close(ionfd);
+         ionfd = -1;
+@@ -3255,7 +3192,8 @@ void AudioHardware::AudioSessionOutLPA::bufferDeAlloc()
+ 
+ uint32_t AudioHardware::AudioSessionOutLPA::latency() const
+ {
+-    return 54; //latency equal to regular hpcm session
++    // Android wants latency in milliseconds.
++    return 1000;//TODO to correct the value
+ }
+ 
+ void AudioHardware::AudioSessionOutLPA::requestAndWaitForEventThreadExit()
+@@ -3303,11 +3241,11 @@ void  AudioHardware::AudioSessionOutLPA::eventThreadEntry()
+         switch ( cur_pcmdec_event.event_type ) {
+         case AUDIO_EVENT_WRITE_DONE:
+             {
+-                Mutex::Autolock autoLock(mLock);
+                 ALOGE("WRITE_DONE: addr %p len %d and fd is %d\n",
+                      cur_pcmdec_event.event_payload.aio_buf.buf_addr,
+                      cur_pcmdec_event.event_payload.aio_buf.data_len,
+                      (int32_t) cur_pcmdec_event.event_payload.aio_buf.private_data);
++                Mutex::Autolock autoLock(mLock);
+                 mFilledQueueMutex.lock();
+                 BuffersAllocated buf = *(mFilledQueue.begin());
+                 for (List<BuffersAllocated>::iterator it = mFilledQueue.begin();
+@@ -3327,11 +3265,6 @@ void  AudioHardware::AudioSessionOutLPA::eventThreadEntry()
+                             ALOGV("Posting the EOS to the observer player %p", mObserver);
+                             mEosEventReceived = true;
+                             if (mObserver != NULL) {
+-                                mLock.unlock();
+-                                if (fsync(afd) != 0) {
+-                                    ALOGE("fsync failed.");
+-                                }
+-                                mLock.lock();
+                                 ALOGV("mObserver: posting EOS");
+                                 mObserver->postEOS(0);
+                             }
+@@ -3462,19 +3395,17 @@ status_t AudioHardware::AudioSessionOutLPA::drain()
+ 
+ status_t AudioHardware::AudioSessionOutLPA::flush()
+ {
+-    Mutex::Autolock autoLock(mLock);
+     ALOGV("LPA playback flush ");
+     int err;
++    // 2.) Add all the available buffers to Empty Queue (Maintain order)
+     mFilledQueueMutex.lock();
+     mEmptyQueueMutex.lock();
+-    // 1.) Clear the Empty and Filled buffer queue
+-    mEmptyQueue.clear();
+-    mFilledQueue.clear();
+-    // 2.) Add all the available buffers to Empty Queue (Maintain order)
+-    List<BuffersAllocated>::iterator it = mBufPool.begin();
+-    for (; it!=mBufPool.end(); ++it) {
+-        memset(it->memBuf, 0x0, (*it).memBufsize);
+-        mEmptyQueue.push_back(*it);
++    while (!mFilledQueue.empty()) {
++        List<BuffersAllocated>::iterator it = mFilledQueue.begin();
++        BuffersAllocated buf = *it;
++        buf.bytesToWrite = 0;
++        mEmptyQueue.push_back(buf);
++        mFilledQueue.erase(it);
+     }
+     mEmptyQueueMutex.unlock();
+     mFilledQueueMutex.unlock();
+@@ -3558,11 +3489,6 @@ status_t AudioHardware::AudioSessionOutLPA::getRenderPosition(uint32_t *dspFrame
+     return INVALID_OPERATION;
+ }
+ 
+-status_t AudioHardware::AudioSessionOutLPA::getPresentationPosition(uint64_t *frames, struct timespec *timestamp)
+-{
+-    //TODO: enable when supported by driver
+-    return INVALID_OPERATION;
+-}
+ 
+ status_t AudioHardware::AudioSessionOutLPA::getBufferInfo(buf_info **buf) {
+ 
+@@ -3571,7 +3497,7 @@ status_t AudioHardware::AudioSessionOutLPA::getBufferInfo(buf_info **buf) {
+     tempbuf->bufsize = LPA_BUFFER_SIZE;
+     tempbuf->nBufs = mInputBufferCount;
+     tempbuf->buffers = (int **)((char*)tempbuf + sizeof(buf_info));
+-    List<BuffersAllocated>::iterator it = mBufPool.begin();
++    List<BuffersAllocated>::iterator it = mEmptyQueue.begin();
+     for (int i = 0; i < mInputBufferCount; i++) {
+         tempbuf->buffers[i] = (int *)it->memBuf;
+         it++;
+@@ -3592,18 +3518,16 @@ status_t AudioHardware::AudioSessionOutLPA::isBufferAvailable(int *isAvail) {
+         ALOGV("Write: waiting on mWriteCv");
+         mLock.unlock();
+         mWriteCv.wait(mEmptyQueueMutex);
+-        mEmptyQueueMutex.unlock();
+         mLock.lock();
+         if (mSkipWrite) {
+             ALOGV("Write: Flushing the previous write buffer");
+             mSkipWrite = false;
++            mEmptyQueueMutex.unlock();
+             return NO_ERROR;
+         }
+         ALOGV("Write: received a signal to wake up");
+-    } else {
+-        ALOGV("Buffer available in empty queue");
+-        mEmptyQueueMutex.unlock();
+     }
++    mEmptyQueueMutex.unlock();
+ 
+     *isAvail = true;
+     return NO_ERROR;
+@@ -3661,7 +3585,7 @@ ssize_t AudioHardware::AudioStreamInMSM72xx::read( void* buffer, ssize_t bytes)
+ 
+     // Resetting the bytes value, to return the appropriate read value
+     bytes = 0;
+-    if (mFormat == AUDIO_FORMAT_AAC)
++    if (mFormat == AudioSystem::AAC)
+     {
+         *((uint32_t*)recogPtr) = 0x51434F4D ;// ('Q','C','O', 'M') Number to identify format as AAC by higher layers
+         recogPtr++;
+@@ -3672,7 +3596,7 @@ ssize_t AudioHardware::AudioStreamInMSM72xx::read( void* buffer, ssize_t bytes)
+     }
+     while (count > 0) {
+ 
+-        if (mFormat == AUDIO_FORMAT_AAC) {
++        if (mFormat == AudioSystem::AAC) {
+             frameSizePtr = (uint16_t *)p;
+             p += sizeof(uint16_t);
+             if(!(count > 2)) break;
+@@ -3685,7 +3609,7 @@ ssize_t AudioHardware::AudioStreamInMSM72xx::read( void* buffer, ssize_t bytes)
+             p += bytesRead;
+             bytes += bytesRead;
+ 
+-            if (mFormat == AUDIO_FORMAT_AAC){
++            if (mFormat == AudioSystem::AAC){
+                 *frameSizePtr =  bytesRead;
+                 (*frameCountPtr)++;
+             }
+@@ -3707,7 +3631,7 @@ ssize_t AudioHardware::AudioStreamInMSM72xx::read( void* buffer, ssize_t bytes)
+             ALOGW("EAGAIN - retrying");
+         }
+     }
+-    if (mFormat == AUDIO_FORMAT_AAC)
++    if (mFormat == AudioSystem::AAC)
+          return aac_framesize;
+ 
+     return bytes;
+@@ -3725,7 +3649,7 @@ status_t AudioHardware::AudioStreamInMSM72xx::standby()
+     if (!mHardware) return -1;
+     // restore output routing if necessary
+ #ifdef QCOM_FM_ENABLED
+-    if (!mHardware->isFMAnalog() && !mHardware->IsFmon())
++    if (!mHardware->IsFmon())
+ #endif
+     {
+         mHardware->clearCurDevice();
+diff --git a/audio/AudioPolicyManager.cpp b/audio/AudioPolicyManager.cpp
+index a3a5993..8733ac9 100644
+--- a/audio/AudioPolicyManager.cpp
++++ b/audio/AudioPolicyManager.cpp
+@@ -66,7 +66,7 @@ extern "C" void destroyAudioPolicyManager(AudioPolicyInterface *interface)
+ 
+ audio_io_handle_t AudioPolicyManager::getOutput(AudioSystem::stream_type stream,
+                                     uint32_t samplingRate,
+-                                    audio_format_t format,
++                                    uint32_t format,
+                                     uint32_t channelMask,
+                                     AudioSystem::output_flags flags,
+                                     const audio_offload_info_t *offloadInfo)
+@@ -322,6 +322,8 @@ audio_devices_t AudioPolicyManager::getDeviceForStrategy(routing_strategy strate
+             if (device) break;
+             device = mAvailableOutputDevices & AUDIO_DEVICE_OUT_WIRED_HEADSET;
+             if (device) break;
++            device = mAvailableOutputDevices & AUDIO_DEVICE_OUT_USB_ACCESSORY;
++            if (device) break;
+             device = mAvailableOutputDevices & AUDIO_DEVICE_OUT_USB_DEVICE;
+             if (device) break;
+             device = mAvailableOutputDevices & AUDIO_DEVICE_OUT_DGTL_DOCK_HEADSET;
+@@ -347,6 +349,8 @@ audio_devices_t AudioPolicyManager::getDeviceForStrategy(routing_strategy strate
+                 device = mAvailableOutputDevices & AUDIO_DEVICE_OUT_BLUETOOTH_A2DP_SPEAKER;
+                 if (device) break;
+             }
++            device = mAvailableOutputDevices & AUDIO_DEVICE_OUT_USB_ACCESSORY;
++            if (device) break;
+             device = mAvailableOutputDevices & AUDIO_DEVICE_OUT_USB_DEVICE;
+             if (device) break;
+             device = mAvailableOutputDevices & AUDIO_DEVICE_OUT_DGTL_DOCK_HEADSET;
+@@ -460,7 +464,7 @@ audio_devices_t AudioPolicyManager::getDeviceForStrategy(routing_strategy strate
+               device = getDeviceForStrategy(STRATEGY_PHONE);
+               ALOGV("getDeviceForStrategy() incompatible media and phone devices");
+           }
+-      }
++	  }
+       if (device == AUDIO_DEVICE_NONE) {
+         ALOGE("getDeviceForStrategy() no device found for STRATEGY_MEDIA");
+       }
+@@ -642,8 +646,8 @@ status_t AudioPolicyManager::setDeviceConnectionState(audio_devices_t device,
+                     mScoDeviceAddress = String8(device_address, MAX_DEVICE_ADDRESS_LEN);
+                 } else if (mHasUsb && audio_is_usb_device(device)) {
+                     // handle USB device connection
+-                    mUsbOutCardAndDevice = String8(device_address, MAX_DEVICE_ADDRESS_LEN);
+-                    paramStr = mUsbOutCardAndDevice;
++                    mUsbCardAndDevice = String8(device_address, MAX_DEVICE_ADDRESS_LEN);
++                    paramStr = mUsbCardAndDevice;
+                 }
+                 if (!paramStr.isEmpty()) {
+                     for (size_t i = 0; i < outputs.size(); i++) {
+@@ -661,8 +665,7 @@ status_t AudioPolicyManager::setDeviceConnectionState(audio_devices_t device,
+ 
+                 ALOGD("turning off Fm device in Mode %d",getFMMode());
+                 setFmMode(FM_NONE);
+-                if (pendingForceNone)
+-                    setForceUse(AudioSystem::FOR_MEDIA, AudioSystem::FORCE_NONE);
++				setForceUse(AudioSystem::FOR_MEDIA, AudioSystem::FORCE_NONE);
+                 newDevice = getDeviceForStrategy(STRATEGY_MEDIA, false);
+                 if((newDevice & AudioSystem::DEVICE_OUT_BLUETOOTH_A2DP) ||
+ 				  (newDevice & AudioSystem::DEVICE_OUT_BLUETOOTH_A2DP_HEADPHONES)||
+@@ -691,7 +694,7 @@ status_t AudioPolicyManager::setDeviceConnectionState(audio_devices_t device,
+                 mScoDeviceAddress = "";
+             } else if (mHasUsb && audio_is_usb_device(device)) {
+                 // handle USB device disconnection
+-                mUsbOutCardAndDevice = "";
++                mUsbCardAndDevice = "";
+             }
+         } break;
+ 
+@@ -967,12 +970,7 @@ void AudioPolicyManager::setForceUse(AudioSystem::force_use usage, AudioSystem::
+             ALOGW("setForceUse() invalid config %d for FOR_MEDIA", config);
+             return;
+         }
+-        if (getFMMode() == FM_DIGITAL && config == AudioSystem::FORCE_NONE) {
+-            ALOGE("donot change config as FM Mode is still digital");
+-            pendingForceNone = true;
+-            return;
+-        } else {
+-          pendingForceNone = false;
++        {
+           mForceUse[usage] = config;
+         }
+         break;
+@@ -1041,8 +1039,8 @@ void AudioPolicyManager::setForceUse(AudioSystem::force_use usage, AudioSystem::
+ AudioPolicyManagerBase::IOProfile *AudioPolicyManager::getProfileForDirectOutput(
+                                                                audio_devices_t device,
+                                                                uint32_t samplingRate,
+-                                                               audio_format_t format,
+-                                                               audio_channel_mask_t channelMask,
++                                                               uint32_t format,
++                                                               uint32_t channelMask,
+                                                                audio_output_flags_t flags)
+ {
+     if( !((flags & AUDIO_OUTPUT_FLAG_LPA)   ||
+@@ -1082,8 +1080,8 @@ AudioPolicyManagerBase::IOProfile *AudioPolicyManager::getProfileForDirectOutput
+ bool AudioPolicyManager::isCompatibleProfile(AudioPolicyManagerBase::IOProfile *profile,
+                                              audio_devices_t device,
+                                              uint32_t samplingRate,
+-                                             audio_format_t format,
+-                                             audio_channel_mask_t channelMask,
++                                             uint32_t format,
++                                             uint32_t channelMask,
+                                             audio_output_flags_t flags)
+ {
+     if ((profile->mSupportedDevices & device) != device) {
+@@ -1350,6 +1348,7 @@ audio_devices_t AudioPolicyManager::getDeviceForInputSource(int inputSource)
+     case AUDIO_SOURCE_MIC:
+     case AUDIO_SOURCE_VOICE_RECOGNITION:
+     case AUDIO_SOURCE_HOTWORD:
++    case AUDIO_SOURCE_VOICE_COMMUNICATION:
+         if (mForceUse[AudioSystem::FOR_RECORD] == AudioSystem::FORCE_BT_SCO &&
+             mAvailableInputDevices & AUDIO_DEVICE_IN_BLUETOOTH_SCO_HEADSET) {
+             device = AUDIO_DEVICE_IN_BLUETOOTH_SCO_HEADSET;
+@@ -1359,9 +1358,6 @@ audio_devices_t AudioPolicyManager::getDeviceForInputSource(int inputSource)
+             device = AUDIO_DEVICE_IN_BUILTIN_MIC;
+         }
+         break;
+-    case AUDIO_SOURCE_VOICE_COMMUNICATION:
+-        device = AudioSystem::DEVICE_IN_COMMUNICATION;
+-        break;
+     case AUDIO_SOURCE_CAMCORDER:
+         if (mAvailableInputDevices & AUDIO_DEVICE_IN_BACK_MIC) {
+             device = AUDIO_DEVICE_IN_BACK_MIC;
+@@ -1442,17 +1438,18 @@ status_t AudioPolicyManager::startOutput(audio_io_handle_t output,
+                 }
+             }
+         }
++    uint32_t NewDevice = (uint32_t)AudioPolicyManagerBase::getNewDevice(output, true);
+ #ifdef QCOM_FM_ENABLED
+     if((stream == AudioSystem::SYSTEM) && (FM_ANALOG == getFMMode())
+-    && (newDevice == (audio_devices_t)AudioSystem::DEVICE_OUT_FM))
++    && (NewDevice == (audio_devices_t)AudioSystem::DEVICE_OUT_FM))
+     {
+-        newDevice = (audio_devices_t)((uint32_t)newDevice | AudioSystem::DEVICE_OUT_WIRED_HEADSET);
+-        ALOGE("Selecting AnlgFM + CODEC device %x",newDevice);
+-        muteWaitMs = setOutputDevice(output, (audio_devices_t)newDevice, true);
++        NewDevice = (audio_devices_t)((uint32_t)newDevice | AudioSystem::DEVICE_OUT_WIRED_HEADSET);
++        ALOGE("Selecting AnlgFM + CODEC device %x",NewDevice);
++        muteWaitMs = setOutputDevice(output, (audio_devices_t)NewDevice, true);
+     }
+     else
+ #endif
+-        muteWaitMs = setOutputDevice(output, (audio_devices_t)newDevice, force);
++        muteWaitMs = setOutputDevice(output, (audio_devices_t)NewDevice, force);
+ 
+         // handle special case for sonification while in call
+         if (isInCall()) {
+@@ -1573,6 +1570,7 @@ status_t AudioPolicyManager::stopInput(audio_io_handle_t input)
+     }
+ }
+ 
++
+ uint32_t AudioPolicyManager::setOutputDevice(audio_io_handle_t output, audio_devices_t device, bool force, int delayMs)
+ {
+     ALOGV("setOutputDevice() output %d device %04x delayMs %d", output, device, delayMs);
+diff --git a/audio/AudioPolicyManager.h b/audio/AudioPolicyManager.h
+index f89592a..68945b4 100644
+--- a/audio/AudioPolicyManager.h
++++ b/audio/AudioPolicyManager.h
+@@ -45,7 +45,7 @@ public:
+ 
+         virtual audio_io_handle_t getOutput(AudioSystem::stream_type stream,
+                                             uint32_t samplingRate = 0,
+-                                            audio_format_t format = AUDIO_FORMAT_DEFAULT,
++                                            uint32_t format = AudioSystem::FORMAT_DEFAULT,
+                                             uint32_t channels = 0,
+                                             AudioSystem::output_flags flags =
+                                                     AudioSystem::OUTPUT_FLAG_INDIRECT,
+@@ -57,8 +57,8 @@ public:
+                                                            AudioSystem::device_connection_state state,
+                                                            const char *device_address);
+ 
+-        virtual void setPhoneState(int state);
+-
++		virtual void setPhoneState(int state);
++		
+         virtual audio_devices_t getDeviceForVolume(audio_devices_t device);
+ 
+         virtual uint32_t  checkDeviceMuteStrategies(AudioOutputDescriptor *outputDesc,
+@@ -67,7 +67,6 @@ public:
+         virtual void setForceUse(AudioSystem::force_use usage, AudioSystem::forced_config config);
+ protected:
+         virtual audio_devices_t getDeviceForStrategy(routing_strategy strategy, bool fromCache = true);
+-
+         fm_modes fmMode;
+         bool pendingForceNone;
+ 
+@@ -88,21 +87,21 @@ protected:
+         virtual AudioPolicyManagerBase::IOProfile* getProfileForDirectOutput(
+                                                      audio_devices_t device,
+                                                      uint32_t samplingRate,
+-                                                     audio_format_t format,
+-                                                     audio_channel_mask_t channelMask,
++                                                     uint32_t format,
++                                                     uint32_t channelMask,
+                                                      audio_output_flags_t flags);
+ 
+ 
+         bool    isCompatibleProfile(AudioPolicyManagerBase::IOProfile *profile,
+                                     audio_devices_t device,
+                                     uint32_t samplingRate,
+-                                    audio_format_t format,
+-                                    audio_channel_mask_t channelMask,
++                                    uint32_t format,
++                                    uint32_t channelMask,
+                                     audio_output_flags_t flags);
+         // check that volume change is permitted, compute and send new volume to audio hardware
+         status_t checkAndSetVolume(int stream, int index, audio_io_handle_t output, audio_devices_t device, int delayMs = 0, bool force = false);
+         status_t stopInput(audio_io_handle_t input);
+-        // select input device corresponding to requested audio source
++		// select input device corresponding to requested audio source
+         virtual audio_devices_t getDeviceForInputSource(int inputSource);
+ 
+         virtual uint32_t setOutputDevice(audio_io_handle_t output,
+diff --git a/audio/HardwarePinSwitching.c b/audio/HardwarePinSwitching.c
+index 943fa09..3966f1c 100644
+--- a/audio/HardwarePinSwitching.c
++++ b/audio/HardwarePinSwitching.c
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2011, The Linux Foundation. All rights reserved.
++ * Copyright (c) 2011, Code Aurora Forum. All rights reserved.
+  *
+  * Redistribution and use in source and binary forms, with or without
+  * modification, are permitted provided that the following conditions are met:
+@@ -8,7 +8,7 @@
+  *        * Redistributions in binary form must reproduce the above copyright
+  *            notice, this list of conditions and the following disclaimer in the
+  *            documentation and/or other materials provided with the distribution.
+- *        * Neither the name of The Linux Foundation nor
++ *        * Neither the name of Code Aurora nor
+  *            the names of its contributors may be used to endorse or promote
+  *            products derived from this software without specific prior written
+  *            permission.
+diff --git a/audio/HardwarePinSwitching.h b/audio/HardwarePinSwitching.h
+index 8d4ddf5..0522dc3 100644
+--- a/audio/HardwarePinSwitching.h
++++ b/audio/HardwarePinSwitching.h
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2011, The Linux Foundation. All rights reserved.
++ * Copyright (c) 2011, Code Aurora Forum. All rights reserved.
+  *
+  * Redistribution and use in source and binary forms, with or without
+  * modification, are permitted provided that the following conditions are met:
+@@ -8,7 +8,7 @@
+  *        * Redistributions in binary form must reproduce the above copyright
+  *            notice, this list of conditions and the following disclaimer in the
+  *            documentation and/or other materials provided with the distribution.
+- *        * Neither the name of The Linux Foundation nor
++ *        * Neither the name of Code Aurora nor
+  *            the names of its contributors may be used to endorse or promote
+  *            products derived from this software without specific prior written
+  *            permission.
+diff --git a/audio/audio_hw_hal.cpp b/audio/audio_hw_hal.cpp
+index b7551f9..652595e 100644
+--- a/audio/audio_hw_hal.cpp
++++ b/audio/audio_hw_hal.cpp
+@@ -1,6 +1,6 @@
+ /*
+  * Copyright (C) 2011 The Android Open Source Project
+- * Copyright (c) 2012, The Linux Foundation. All rights reserved.
++ * Copyright (c) 2012, Code Aurora Forum. All rights reserved.
+  *
+  * Licensed under the Apache License, Version 2.0 (the "License");
+  * you may not use this file except in compliance with the License.
+@@ -78,7 +78,7 @@ static uint32_t audio_device_conv_table[][HAL_API_REV_NUM] =
+     { AudioSystem::DEVICE_OUT_FM, AUDIO_DEVICE_OUT_FM },
+     { AudioSystem::DEVICE_OUT_FM_TX, AUDIO_DEVICE_OUT_FM_TX },
+ #endif
+-    { AudioSystem::DEVICE_OUT_DEFAULT, AUDIO_DEVICE_OUT_DEFAULT },
++	{ AudioSystem::DEVICE_OUT_DEFAULT, AUDIO_DEVICE_OUT_DEFAULT },
+     /* input devices */
+     { AudioSystem::DEVICE_IN_COMMUNICATION, AUDIO_DEVICE_IN_COMMUNICATION },
+     { AudioSystem::DEVICE_IN_AMBIENT, AUDIO_DEVICE_IN_AMBIENT },
+@@ -319,14 +319,6 @@ static int out_get_next_write_timestamp(const struct audio_stream_out *stream,
+     return out->qcom_out->getNextWriteTimestamp(timestamp);
+ }
+ 
+-static int out_get_presentation_position(const struct audio_stream_out *stream,
+-                                         uint64_t *frames, struct timespec *timestamp)
+-{
+-    const struct qcom_stream_out *out =
+-        reinterpret_cast<const struct qcom_stream_out *>(stream);
+-    return out->qcom_out->getPresentationPosition(frames, timestamp);
+-}
+-
+ /** audio_stream_in implementation **/
+ static uint32_t in_get_sample_rate(const struct audio_stream *stream)
+ {
+@@ -544,8 +536,7 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
+                                    audio_devices_t devices,
+                                    audio_output_flags_t flags,
+                                    struct audio_config *config,
+-                                   struct audio_stream_out **stream_out,
+-                                   const char *address __unused)
++                                   struct audio_stream_out **stream_out)
+ {
+     struct qcom_audio_device *qadev = to_ladev(dev);
+     status_t status;
+@@ -585,7 +576,6 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
+     out->stream.write = out_write;
+     out->stream.get_render_position = out_get_render_position;
+     out->stream.get_next_write_timestamp = out_get_next_write_timestamp;
+-    out->stream.get_presentation_position = out_get_presentation_position;
+     out->stream.start = out_start;
+     out->stream.pause = out_pause;
+     out->stream.flush = out_flush;
+@@ -618,10 +608,7 @@ static int adev_open_input_stream(struct audio_hw_device *dev,
+                                   audio_io_handle_t handle,
+                                   audio_devices_t devices,
+                                   struct audio_config *config,
+-                                  struct audio_stream_in **stream_in,
+-                                  audio_input_flags_t flags __unused,
+-                                  const char *address __unused,
+-                                  audio_source_t source __unused)
++                                  struct audio_stream_in **stream_in)
+ {
+     struct qcom_audio_device *qadev = to_ladev(dev);
+     status_t status;
+@@ -764,7 +751,7 @@ struct qcom_audio_module HAL_MODULE_INFO_SYM = {
+             hal_api_version: HARDWARE_HAL_API_VERSION,
+             id: AUDIO_HARDWARE_MODULE_ID,
+             name: "QCOM Audio HW HAL",
+-            author: "The Linux Foundation",
++            author: "Code Aurora Forum",
+             methods: &qcom_audio_module_methods,
+             dso : NULL,
+             reserved : {0},
+diff --git a/audio/audio_policy.conf b/audio/audio_policy.conf
+index 73a1209..de5ba88 100644
+--- a/audio/audio_policy.conf
++++ b/audio/audio_policy.conf
+@@ -74,14 +74,4 @@ audio_hw_modules {
+       }
+     }
+   }
+-  usb {
+-    outputs {
+-      usb_accessory {
+-        sampling_rates 44100
+-        channel_masks AUDIO_CHANNEL_OUT_STEREO
+-        formats AUDIO_FORMAT_PCM_16_BIT
+-        devices AUDIO_DEVICE_OUT_USB_ACCESSORY
+-      }
+-    }
+-  }
+ }
+diff --git a/audio/audio_policy_hal.cpp b/audio/audio_policy_hal.cpp
+index c533550..ba0cede 100644
+--- a/audio/audio_policy_hal.cpp
++++ b/audio/audio_policy_hal.cpp
+@@ -1,6 +1,6 @@
+ /*
+  * Copyright (C) 2011 The Android Open Source Project
+- * Copyright (c) 2012, The Linux Foundation. All rights reserved.
++ * Copyright (c) 2012, Code Aurora Forum. All rights reserved.
+  *
+  * Licensed under the Apache License, Version 2.0 (the "License");
+  * you may not use this file except in compliance with the License.
+@@ -179,7 +179,7 @@ static audio_io_handle_t ap_get_output(struct audio_policy *pol,
+ 
+     ALOGV("%s: tid %d", __func__, gettid());
+     return qap->apm->getOutput((AudioSystem::stream_type)stream,
+-                               sampling_rate, format, channelMask,
++                               sampling_rate,(int)  format, channelMask,
+                                (AudioSystem::output_flags)flags, info);
+ }
+ 
+@@ -213,7 +213,7 @@ static audio_io_handle_t ap_get_input(struct audio_policy *pol, audio_source_t i
+                                       audio_in_acoustics_t acoustics)
+ {
+     struct qcom_audio_policy *qap = to_qap(pol);
+-    return qap->apm->getInput((int) inputSource, sampling_rate, format, channelMask,
++    return qap->apm->getInput((int) inputSource, sampling_rate,(int) format, channelMask,
+                               (AudioSystem::audio_in_acoustics)acoustics);
+ }
+ 
+@@ -503,7 +503,7 @@ struct qcom_ap_module HAL_MODULE_INFO_SYM = {
+             version_minor: 0,
+             id: AUDIO_POLICY_HARDWARE_MODULE_ID,
+             name: "QCOM Audio Policy HAL",
+-            author: "The Linux Foundation",
++            author: "Code Aurora Forum",
+             methods: &qcom_ap_module_methods,
+             dso : NULL,
+             reserved : {0},
+diff --git a/msm7x27a.mk b/msm7x27a.mk
+index ac2aaf6..df36471 100644
+--- a/msm7x27a.mk
++++ b/msm7x27a.mk
+@@ -58,11 +58,12 @@ PRODUCT_PACKAGES += \
+     setup_fs
+ 
+ # FM Radio
+-#PRODUCT_PACKAGES += \
+-#    FM2 \
+-#    FMRecord \
+-#    libqcomfm_jni \
+-#    qcom.fmradio
++PRODUCT_PACKAGES += \
++    FM2 \
++    FMRecord \
++    libqcomfm_jni \
++    qcom.fmradio \
++    FMRadio
+ 
+ #wifi
+ PRODUCT_PACKAGES += \
+@@ -134,7 +135,7 @@ PRODUCT_PROPERTY_OVERRIDES += \
+     debug.mdpcomp.logs=0 \
+     debug.gralloc.map_fb_memory=1 \
+     debug.hwc.fakevsync=1 \
+-    ro.max.fling_velocity=4000 \
++    ro.max.fling_velocity=8000 \
+     ro.opengles.version=131072 \
+     ro.sf.lcd_density=240
+ 
+@@ -215,4 +216,12 @@ ADDITIONAL_DEFAULT_PROPERTIES += \
+    dalvik.vm.image-dex2oat-Xms=48m \
+    dalvik.vm.image-dex2oat-Xmx=48m
+ 
++# Allow ADB by default
++ADDITIONAL_DEFAULT_PROPERTIES += \
++   ro.secure=0 \
++   ro.adb.secure=0
++
++PRODUCT_PROPERTY_OVERRIDES += \
++   persist.sys.root_access=3
++
+ $(call inherit-product, vendor/huawei/msm7x27a-common/msm7x27a-common-vendor.mk)
+diff --git a/overlay/frameworks/base/core/res/res/values/arrays.xml b/overlay/frameworks/base/core/res/res/values/arrays.xml
+index 5b65ae4..b764c59 100644
+--- a/overlay/frameworks/base/core/res/res/values/arrays.xml
++++ b/overlay/frameworks/base/core/res/res/values/arrays.xml
+@@ -19,17 +19,6 @@
+ -->
+ <resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
+ 
+-    <!-- Defines the shutdown options shown in the reboot dialog. -->
+-    <array name="shutdown_reboot_options" translatable="false">
+-        <item>@string/reboot_reboot</item>
+-        <item>@string/reboot_recovery</item>
+-    </array>
+ 
+-    <!-- Do not translate. Defines the shutdown actions passed to the kernel.
+-         The first item should be empty for regular reboot. -->
+-    <string-array name="shutdown_reboot_actions" translatable="false">
+-        <item></item>
+-        <item>recovery</item>
+-    </string-array>
+ 
+ </resources>
+diff --git a/overlay/frameworks/base/core/res/res/values/config.xml b/overlay/frameworks/base/core/res/res/values/config.xml
+index 44fe9b8..0f9231c 100644
+--- a/overlay/frameworks/base/core/res/res/values/config.xml
++++ b/overlay/frameworks/base/core/res/res/values/config.xml
+@@ -204,9 +204,10 @@
+             8 - Assistant (search)
+            16 - App switch
+            32 - Camera
++           64 - Volume Wake Rocker
+         For example, a device with Home, Back and Menu keys would set this
+         config to 7. -->
+-    <integer name="config_deviceHardwareKeys">7</integer>
++    <integer name="config_deviceHardwareKeys">71</integer>
+ 
+     <!-- Control the behavior when the user long presses the home button.
+             0 - Nothing
+diff --git a/patches/apply.sh b/patches/apply.sh
+index 49b244b..be73b56 100755
+--- a/patches/apply.sh
++++ b/patches/apply.sh
+@@ -13,5 +13,5 @@ for i in $(find "$PATCHBASE"/* -type d); do
+ 	done
+ 	echo applying $PATCHNAME to $PATCHTARGET
+ 	cd "$CMBASE/$PATCHTARGET" || exit 1
+-	git am -3 "$PATCHBASE/$PATCHNAME"/* || exit 1
++#	git am -3 "$PATCHBASE/$PATCHNAME"/* || exit 1
+ done
+diff --git a/patches/bionic/0001-cortex-a5-support.patch b/patches/bionic/0001-cortex-a5-support.patch
+deleted file mode 100644
+index 9883e91..0000000
+--- a/patches/bionic/0001-cortex-a5-support.patch
++++ /dev/null
+@@ -1,44 +0,0 @@
+-From 22860f23a2577b8fb7cc47d95b7ec6e4fbd2d8da Mon Sep 17 00:00:00 2001
+-From: Kyle Harrison <khwebmail@gmail.com>
+-Date: Thu, 16 Apr 2015 12:38:38 +0100
+-Subject: [PATCH] cortex-a5 support
+-
+-Change-Id: If77afda790ab886583afb31b4e0317049e8c19a2
+----
+- libc/arch-arm/arm.mk                 | 4 ++--
+- libc/arch-arm/cortex-a5/cortex-a5.mk | 1 +
+- 2 files changed, 3 insertions(+), 2 deletions(-)
+- create mode 100644 libc/arch-arm/cortex-a5/cortex-a5.mk
+-
+-diff --git a/libc/arch-arm/arm.mk b/libc/arch-arm/arm.mk
+-index 36612de..9c365d6 100644
+---- a/libc/arch-arm/arm.mk
+-+++ b/libc/arch-arm/arm.mk
+-@@ -71,7 +71,7 @@ ifeq ($(strip $(TARGET_$(my_2nd_arch_prefix)CPU_VARIANT)),)
+-   $(warning TARGET_$(my_2nd_arch_prefix)ARCH is arm, but TARGET_$(my_2nd_arch_prefix)CPU_VARIANT is not defined)
+- endif
+- 
+--ifeq ($(filter cortex-a9 cortex-a53 denver krait scorpion, $(strip $(TARGET_$(my_2nd_arch_prefix)CPU_VARIANT))),)
+-+ifeq ($(filter cortex-a5 cortex-a9 cortex-a53 denver krait scorpion, $(strip $(TARGET_$(my_2nd_arch_prefix)CPU_VARIANT))),)
+- libc_bionic_src_files_arm += \
+-     upstream-openbsd/lib/libc/string/stpcpy.c
+- endif
+-@@ -83,7 +83,7 @@ endif
+- 
+- cpu_variant_mk := $(LOCAL_PATH)/arch-arm/$(TARGET_$(my_2nd_arch_prefix)CPU_VARIANT)/$(TARGET_$(my_2nd_arch_prefix)CPU_VARIANT).mk
+- ifeq ($(wildcard $(cpu_variant_mk)),)
+--$(error "TARGET_$(my_2nd_arch_prefix)CPU_VARIANT not set or set to an unknown value. Possible values are cortex-a7, cortex-a8, cortex-a9, cortex-a15, krait, scorpion, denver. Use generic for devices that do not have a CPU similar to any of the supported cpu variants.")
+-+$(error "TARGET_$(my_2nd_arch_prefix)CPU_VARIANT not set or set to an unknown value. Possible values are cortex-a5, cortex-a7, cortex-a8, cortex-a9, cortex-a15, krait, scorpion, denver. Use generic for devices that do not have a CPU similar to any of the supported cpu variants.")
+- endif
+- include $(cpu_variant_mk)
+- libc_common_additional_dependencies += $(cpu_variant_mk)
+-diff --git a/libc/arch-arm/cortex-a5/cortex-a5.mk b/libc/arch-arm/cortex-a5/cortex-a5.mk
+-new file mode 100644
+-index 0000000..944db2c
+---- /dev/null
+-+++ b/libc/arch-arm/cortex-a5/cortex-a5.mk
+-@@ -0,0 +1 @@
+-+include bionic/libc/arch-arm/cortex-a9/cortex-a9.mk
+--- 
+-2.3.5
+-
+diff --git a/patches/build/0001-msm7x27a-support.patch b/patches/build/0001-msm7x27a-support.patch
+deleted file mode 100644
+index 033f938..0000000
+--- a/patches/build/0001-msm7x27a-support.patch
++++ /dev/null
+@@ -1,38 +0,0 @@
+-From 82e8962277ed64a00f49cffc35181f6032d41ddc Mon Sep 17 00:00:00 2001
+-From: Kyle Harrison <khwebmail@gmail.com>
+-Date: Thu, 16 Apr 2015 12:35:37 +0100
+-Subject: [PATCH] msm7x27a support
+-
+-Change-Id: I052b47237022f1a73293c5bbe591203be01809c2
+----
+- core/qcom_target.mk | 2 +-
+- core/qcom_utils.mk  | 1 +
+- 2 files changed, 2 insertions(+), 1 deletion(-)
+-
+-diff --git a/core/qcom_target.mk b/core/qcom_target.mk
+-index 825ddbb..112ab41 100644
+---- a/core/qcom_target.mk
+-+++ b/core/qcom_target.mk
+-@@ -17,7 +17,7 @@ ifeq ($(BOARD_USES_QCOM_HARDWARE),true)
+-     TARGET_ENABLE_QC_AV_ENHANCEMENTS := true
+- 
+-     # Enable DirectTrack for legacy targets
+--    ifneq ($(filter msm7x30 msm8660 msm8960,$(TARGET_BOARD_PLATFORM)),)
+-+    ifneq ($(filter msm7x27a msm7x30 msm8660 msm8960,$(TARGET_BOARD_PLATFORM)),)
+-         ifeq ($(BOARD_USES_LEGACY_ALSA_AUDIO),true)
+-             qcom_flags += -DQCOM_DIRECTTRACK
+-         endif
+-diff --git a/core/qcom_utils.mk b/core/qcom_utils.mk
+-index d1dd262..050959d 100755
+---- a/core/qcom_utils.mk
+-+++ b/core/qcom_utils.mk
+-@@ -1,5 +1,6 @@
+- # Board platforms lists to be used for
+- # TARGET_BOARD_PLATFORM specific featurization
+-+QCOM_BOARD_PLATFORMS += msm7x27a
+- QCOM_BOARD_PLATFORMS += msm7x30
+- QCOM_BOARD_PLATFORMS += msm8226
+- QCOM_BOARD_PLATFORMS += msm8610
+--- 
+-2.3.5
+-
+diff --git a/patches/build/0002-Fix-cortex-a5-cpu-variant.patch b/patches/build/0002-Fix-cortex-a5-cpu-variant.patch
+deleted file mode 100644
+index 10cc8cd..0000000
+--- a/patches/build/0002-Fix-cortex-a5-cpu-variant.patch
++++ /dev/null
+@@ -1,26 +0,0 @@
+-From 7e097d1fb5297480b907a4cee42f6a2dff311b04 Mon Sep 17 00:00:00 2001
+-From: Kyle Harrison <khwebmail@gmail.com>
+-Date: Sat, 22 Aug 2015 18:25:27 +0100
+-Subject: [PATCH] Fix cortex-a5 cpu variant
+-
+-Change-Id: I25f6376c62484019a23e9a9860b73e74e3e81742
+----
+- core/combo/arch/arm/armv7-a-neon.mk | 2 +-
+- 1 file changed, 1 insertion(+), 1 deletion(-)
+-
+-diff --git a/core/combo/arch/arm/armv7-a-neon.mk b/core/combo/arch/arm/armv7-a-neon.mk
+-index c6c38e2..1b8b8be 100644
+---- a/core/combo/arch/arm/armv7-a-neon.mk
+-+++ b/core/combo/arch/arm/armv7-a-neon.mk
+-@@ -31,7 +31,7 @@ ifeq ($(strip $(TARGET_$(combo_2nd_arch_prefix)CPU_VARIANT)),cortex-a7)
+- 		-Wl,--no-fix-cortex-a8
+- else
+- ifeq ($(strip $(TARGET_$(combo_2nd_arch_prefix)CPU_VARIANT)),cortex-a5)
+--	arch_variant_cflags := -mcpu=cortex-a7 -mfpu=neon-vfpv4
+-+	arch_variant_cflags := -mcpu=cortex-a5 -mfpu=neon-vfpv4
+- 	arch_variant_ldflags := \
+- 		-Wl,--no-fix-cortex-a8
+- else
+--- 
+-2.5.0
+-
+diff --git a/patches/build/0003-Avoid-accidentally-using-the-host-s-native-as-comman.patch b/patches/build/0003-Avoid-accidentally-using-the-host-s-native-as-comman.patch
+deleted file mode 100644
+index 78d680d..0000000
+--- a/patches/build/0003-Avoid-accidentally-using-the-host-s-native-as-comman.patch
++++ /dev/null
+@@ -1,36 +0,0 @@
+-From 97fa486e0c9aed0562a00e97c67ccddcc4077d6e Mon Sep 17 00:00:00 2001
+-From: Alistair Strachan <alistair.strachan@imgtec.com>
+-Date: Thu, 5 May 2016 16:29:08 -0700
+-Subject: [PATCH] Avoid accidentally using the host's native 'as' command.
+-
+-When invoking clang for the host to assemble .S files, the -B flag
+-would not be provided, which allowed the host prebuilt clang to
+-use an 'as' from the native environment. Most of the time this
+-"just works", but some newer 'as' versions cause problems with
+-the older prebuilt toolchain, for example by generating
+-unsupported relocation types.
+-
+-To avoid this problem, simply use the -B flag to tell clang to
+-invoke the assembler from the correct prebuilt gcc prefix.
+-
+-Change-Id: I18ea4f37ae637b652cfd7321c41929f8be075342
+-Signed-off-by: Alistair Strachan <alistair.strachan@imgtec.com>
+----
+- core/clang/HOST_x86_common.mk | 1 +
+- 1 file changed, 1 insertion(+)
+-
+-diff --git a/core/clang/HOST_x86_common.mk b/core/clang/HOST_x86_common.mk
+-index 0241cb6..77547b7 100644
+---- a/core/clang/HOST_x86_common.mk
+-+++ b/core/clang/HOST_x86_common.mk
+-@@ -8,6 +8,7 @@ ifeq ($(HOST_OS),linux)
+- CLANG_CONFIG_x86_LINUX_HOST_EXTRA_ASFLAGS := \
+-   --gcc-toolchain=$($(clang_2nd_arch_prefix)HOST_TOOLCHAIN_FOR_CLANG) \
+-   --sysroot=$($(clang_2nd_arch_prefix)HOST_TOOLCHAIN_FOR_CLANG)/sysroot \
+-+  -B$($(clang_2nd_arch_prefix)HOST_TOOLCHAIN_FOR_CLANG)/x86_64-linux/bin \
+-   -no-integrated-as
+- 
+- CLANG_CONFIG_x86_LINUX_HOST_EXTRA_CFLAGS := \
+--- 
+-2.8.3
+-
+diff --git a/patches/external_wpa_supplicant_8/0001-reduce-scan-timeout.patch b/patches/external_wpa_supplicant_8/0001-reduce-scan-timeout.patch
+deleted file mode 100644
+index c7d7f8f..0000000
+--- a/patches/external_wpa_supplicant_8/0001-reduce-scan-timeout.patch
++++ /dev/null
+@@ -1,31 +0,0 @@
+-From d4e29720bc7ad6dc48bf7c202efc63bb798ffc3c Mon Sep 17 00:00:00 2001
+-From: Robin Humble <plaguedbypenguins@gmail.com>
+-Date: Sat, 20 Apr 2013 23:55:23 +1000
+-Subject: [PATCH] wpa_supplicant: reduce scan timeout to workaround ar6000
+- problem
+-
+-Ar6k hangs on the first scan after resume causing slow wifi reconnects
+-as wpa_supplicant must timeout (30s) and then retry. Work around the
+-binary module bug by setting the wpa_supplicant scan timeout to be much
+-shorter. Hopefully 5s is still long enough. Scans typically take 2-3s
+-on my network.
+----
+- src/drivers/driver_wext.c | 2 +-
+- 1 file changed, 1 insertion(+), 1 deletion(-)
+-
+-diff --git a/src/drivers/driver_wext.c b/src/drivers/driver_wext.c
+-index 701b7a3..ffcfe8a 100644
+---- a/src/drivers/driver_wext.c
+-+++ b/src/drivers/driver_wext.c
+-@@ -1065,7 +1065,7 @@ int wpa_driver_wext_scan(void *priv, struct wpa_driver_scan_params *params)
+- 		 * when scan is complete, so use longer timeout to avoid race
+- 		 * conditions with scanning and following association request.
+- 		 */
+--		timeout = 30;
+-+		timeout = 5;
+- 	}
+- 	wpa_printf(MSG_DEBUG, "Scan requested (ret=%d) - scan timeout %d "
+- 		   "seconds", ret, timeout);
+--- 
+-1.8.1.2
+-
+diff --git a/patches/frameworks_av/0001-Add-msm7x27a-for-DirectTrack-and-legacy-audio.patch b/patches/frameworks_av/0001-Add-msm7x27a-for-DirectTrack-and-legacy-audio.patch
+deleted file mode 100644
+index 5685bb9..0000000
+--- a/patches/frameworks_av/0001-Add-msm7x27a-for-DirectTrack-and-legacy-audio.patch
++++ /dev/null
+@@ -1,49 +0,0 @@
+-From a7f0a5acb00684e9c814712c9f7fb73811889b62 Mon Sep 17 00:00:00 2001
+-From: Kyle Harrison <khwebmail@gmail.com>
+-Date: Sat, 22 Nov 2014 22:25:21 +0000
+-Subject: [PATCH] Add msm7x27a for DirectTrack and legacy audio
+-
+-Change-Id: Ie2eb83b929465acd4c4b370b276340fd983ea0b9
+----
+- media/libmedia/Android.mk       | 2 +-
+- media/libstagefright/Android.mk | 4 ++--
+- 2 files changed, 3 insertions(+), 3 deletions(-)
+-
+-diff --git a/media/libmedia/Android.mk b/media/libmedia/Android.mk
+-index 139d6f8..f25defc 100644
+---- a/media/libmedia/Android.mk
+-+++ b/media/libmedia/Android.mk
+-@@ -76,7 +76,7 @@ LOCAL_SRC_FILES:= \
+- LOCAL_SRC_FILES += ../libnbaio/roundup.c
+- 
+- ifeq ($(BOARD_USES_QCOM_HARDWARE),true)
+--ifneq ($(filter msm7x30 msm8660 msm8960,$(TARGET_BOARD_PLATFORM)),)
+-+ifneq ($(filter msm7x27a msm7x30 msm8660 msm8960,$(TARGET_BOARD_PLATFORM)),)
+- ifeq ($(BOARD_USES_LEGACY_ALSA_AUDIO),true)
+- LOCAL_SRC_FILES += \
+-     IDirectTrack.cpp \
+-diff --git a/media/libstagefright/Android.mk b/media/libstagefright/Android.mk
+-index d1f0289..708900d 100644
+---- a/media/libstagefright/Android.mk
+-+++ b/media/libstagefright/Android.mk
+-@@ -126,7 +126,7 @@ LOCAL_SHARED_LIBRARIES := \
+-         libpowermanager
+- 
+- ifeq ($(BOARD_USES_QCOM_HARDWARE),true)
+--ifneq ($(filter msm7x30 msm8660 msm8960,$(TARGET_BOARD_PLATFORM)),)
+-+ifneq ($(filter msm7x27a msm7x30 msm8660 msm8960,$(TARGET_BOARD_PLATFORM)),)
+- ifeq ($(BOARD_USES_LEGACY_ALSA_AUDIO),true)
+-    ifeq ($(USE_TUNNEL_MODE),true)
+-         LOCAL_CFLAGS += -DUSE_TUNNEL_MODE
+-@@ -214,7 +214,7 @@ LOCAL_SHARED_LIBRARIES += \
+-         libstagefright_foundation \
+-         libdl
+- 
+--LOCAL_CFLAGS += -Wno-multichar
+-+LOCAL_CFLAGS += -Wno-multichar -Wno-unused-parameter
+- 
+- ifeq ($(DTS_CODEC_M_), true)
+-   LOCAL_SRC_FILES+= DTSUtils.cpp
+--- 
+-2.3.6
+-
+diff --git a/patches/frameworks_av/0002-Enable-meta-mode-for-7x27a-video-enco.patch b/patches/frameworks_av/0002-Enable-meta-mode-for-7x27a-video-enco.patch
+deleted file mode 100644
+index 976fdd1..0000000
+--- a/patches/frameworks_av/0002-Enable-meta-mode-for-7x27a-video-enco.patch
++++ /dev/null
+@@ -1,121 +0,0 @@
+-From 9b9bbc6caed87207b3106e271e93851e4f55b459 Mon Sep 17 00:00:00 2001
+-From: Kyle Harrison <khwebmail@gmail.com>
+-Date: Wed, 12 Aug 2015 20:21:07 +0100
+-Subject: [PATCH] libstagefright: Enable meta mode for 7x27a video encoder
+-
+-msm7627a family of chipsets supports only one input frame at
+-one time. camera expects the input frame to be released before
+-sending another frame. so send one input buffer and available
+-output bufefrs to video encoder component. Release the input
+-buffer to camera (to get another frame) after receiving input
+-frame done callback from video encoder component.
+----
+- include/media/stagefright/MediaCodecSource.h        | 7 +++++--
+- media/libmediaplayerservice/Android.mk              | 4 ++++
+- media/libmediaplayerservice/StagefrightRecorder.cpp | 7 +++++++
+- media/libstagefright/Android.mk                     | 4 ++++
+- media/libstagefright/MediaCodecSource.cpp           | 8 +++++++-
+- 5 files changed, 27 insertions(+), 3 deletions(-)
+-
+-diff --git a/include/media/stagefright/MediaCodecSource.h b/include/media/stagefright/MediaCodecSource.h
+-index edd6494..7c0ba3d 100644
+---- a/include/media/stagefright/MediaCodecSource.h
+-+++ b/include/media/stagefright/MediaCodecSource.h
+-@@ -40,8 +40,11 @@ class MetaData;
+- struct MediaCodecSource : public MediaSource,
+-                           public MediaBufferObserver {
+-     enum FlagBits {
+--        FLAG_USE_SURFACE_INPUT      = 1,
+--        FLAG_USE_METADATA_INPUT     = 2,
+-+        FLAG_USE_SURFACE_INPUT           = 1,
+-+        FLAG_USE_METADATA_INPUT          = 2,
+-+#ifdef USE_SUBMIT_ONE_INPUT_BUFFER			
+-+		FLAG_USE_SUBMIT_ONE_INPUT_BUFFER = 3,
+-+#endif		
+-     };
+- 
+-     static sp<MediaCodecSource> Create(
+-diff --git a/media/libmediaplayerservice/Android.mk b/media/libmediaplayerservice/Android.mk
+-index 019e4c7..1aa5e74 100644
+---- a/media/libmediaplayerservice/Android.mk
+-+++ b/media/libmediaplayerservice/Android.mk
+-@@ -72,6 +72,10 @@ ifeq ($(strip $(AUDIO_FEATURE_ENABLED_EXTN_FLAC_DECODER)),true)
+- endif
+- endif
+- 
+-+ifeq ($(TARGET_BOARD_PLATFORM),msm7x27a)
+-+    LOCAL_CFLAGS += -DUSE_SUBMIT_ONE_INPUT_BUFFER
+-+endif
+-+
+- include $(BUILD_SHARED_LIBRARY)
+- 
+- include $(call all-makefiles-under,$(LOCAL_PATH))
+-diff --git a/media/libmediaplayerservice/StagefrightRecorder.cpp b/media/libmediaplayerservice/StagefrightRecorder.cpp
+-index 90d4a25..eb98fac 100644
+---- a/media/libmediaplayerservice/StagefrightRecorder.cpp
+-+++ b/media/libmediaplayerservice/StagefrightRecorder.cpp
+-@@ -1339,6 +1339,9 @@ void StagefrightRecorder::clipVideoFrameWidth() {
+- 
+- status_t StagefrightRecorder::checkVideoEncoderCapabilities(
+-         bool *supportsCameraSourceMetaDataMode) {
+-+#ifdef USE_SUBMIT_ONE_INPUT_BUFFER
+-+    *supportsCameraSourceMetaDataMode = true;
+-+#else			
+-     /* hardware codecs must support camera source meta data mode */
+-     Vector<CodecCapabilities> codecs;
+-     OMXClient client;
+-@@ -1355,6 +1358,7 @@ status_t StagefrightRecorder::checkVideoEncoderCapabilities(
+-             false /* decoder */, true /* hwCodec */, &codecs);
+- 
+-     *supportsCameraSourceMetaDataMode = codecs.size() > 0;
+-+#endif	
+-     ALOGV("encoder %s camera source meta-data mode",
+-             *supportsCameraSourceMetaDataMode ? "supports" : "DOES NOT SUPPORT");
+- 
+-@@ -1726,6 +1730,9 @@ status_t StagefrightRecorder::setupVideoEncoder(
+-     uint32_t flags = 0;
+-     if (mIsMetaDataStoredInVideoBuffers) {
+-         flags |= MediaCodecSource::FLAG_USE_METADATA_INPUT;
+-+#ifdef USE_SUBMIT_ONE_INPUT_BUFFER
+-+        flags |= MediaCodecSource::FLAG_USE_SUBMIT_ONE_INPUT_BUFFER;
+-+#endif		
+-     }
+- 
+-     if (cameraSource == NULL) {
+-diff --git a/media/libstagefright/Android.mk b/media/libstagefright/Android.mk
+-index 6b02b07..91cf84d 100644
+---- a/media/libstagefright/Android.mk
+-+++ b/media/libstagefright/Android.mk
+-@@ -251,6 +251,10 @@ ifeq ($(BOARD_USE_SEIREN_AUDIO), true)
+- LOCAL_CFLAGS += -DUSE_SEIREN_AUDIO
+- endif
+- 
+-+ifeq ($(TARGET_BOARD_PLATFORM),msm7x27a)
+-+    LOCAL_CFLAGS += -DUSE_SUBMIT_ONE_INPUT_BUFFER
+-+endif
+-+
+- LOCAL_MODULE:= libstagefright
+- 
+- LOCAL_MODULE_TAGS := optional
+-diff --git a/media/libstagefright/MediaCodecSource.cpp b/media/libstagefright/MediaCodecSource.cpp
+-index 7c81570..203a222 100644
+---- a/media/libstagefright/MediaCodecSource.cpp
+-+++ b/media/libstagefright/MediaCodecSource.cpp
+-@@ -431,7 +431,13 @@ status_t MediaCodecSource::initEncoder() {
+-     if (mFlags & FLAG_USE_METADATA_INPUT) {
+-         mOutputFormat->setInt32("store-metadata-in-buffers", 1);
+-     }
+--
+-+	
+-+#ifdef USE_SUBMIT_ONE_INPUT_BUFFER	
+-+	if (mFlags & FLAG_USE_SUBMIT_ONE_INPUT_BUFFER) {
+-+        mOutputFormat->setInt32("Only-Submit-One-Input-Buffer-At-One-Time", 1);
+-+    }
+-+#endif
+-+	
+-     if (mFlags & FLAG_USE_SURFACE_INPUT) {
+-         mOutputFormat->setInt32("create-input-buffers-suspended", 1);
+-     }
+--- 
+-2.5.0
+-
+diff --git a/patches/frameworks_av/0003-Dont-store-metadata-in-video-buffers.patch b/patches/frameworks_av/0003-Dont-store-metadata-in-video-buffers.patch
+deleted file mode 100644
+index 42e0931..0000000
+--- a/patches/frameworks_av/0003-Dont-store-metadata-in-video-buffers.patch
++++ /dev/null
+@@ -1,66 +0,0 @@
+-From dc67f27d62ad9d3a88922b55f05cd1160bed7c69 Mon Sep 17 00:00:00 2001
+-From: Kyle Harrison <khwebmail@gmail.com>
+-Date: Wed, 11 Mar 2015 23:37:33 +0000
+-Subject: [PATCH] Don't store metadata in video buffers - we don't support it.
+-
+-Change-Id: I819a2df29eaf89054eb41c289032c14997e3da35
+----
+- media/libstagefright/ACodec.cpp       | 4 ++++
+- media/libstagefright/Android.mk       | 1 +
+- media/libstagefright/CameraSource.cpp | 3 +++
+- 3 files changed, 8 insertions(+)
+-
+-diff --git a/media/libstagefright/ACodec.cpp b/media/libstagefright/ACodec.cpp
+-index 17f641d..c047faf 100644
+---- a/media/libstagefright/ACodec.cpp
+-+++ b/media/libstagefright/ACodec.cpp
+-@@ -603,11 +603,15 @@ status_t ACodec::allocateBuffersOnPort(OMX_U32 portIndex) {
+- 
+-     status_t err;
+-     if (mNativeWindow != NULL && portIndex == kPortIndexOutput) {
+-+#ifdef NO_METADATA_IN_VIDEO_BUFFERS
+-+        err = allocateOutputBuffersFromNativeWindow();
+-+#else
+-         if (mStoreMetaDataInOutputBuffers) {
+-             err = allocateOutputMetaDataBuffers();
+-         } else {
+-             err = allocateOutputBuffersFromNativeWindow();
+-         }
+-+#endif
+-     } else {
+-         OMX_PARAM_PORTDEFINITIONTYPE def;
+-         InitOMXParams(&def);
+-diff --git a/media/libstagefright/Android.mk b/media/libstagefright/Android.mk
+-index b4ad914..612de94 100644
+---- a/media/libstagefright/Android.mk
+-+++ b/media/libstagefright/Android.mk
+-@@ -236,6 +236,7 @@ LOCAL_C_INCLUDES += \
+- 
+- ifeq ($(TARGET_BOARD_PLATFORM),msm7x27a)
+-     LOCAL_CFLAGS += -DUSE_SUBMIT_ONE_INPUT_BUFFER
+-+    LOCAL_CFLAGS += -DNO_METADATA_IN_VIDEO_BUFFERS
+- endif
+- 
+- LOCAL_MODULE:= libstagefright
+-diff --git a/media/libstagefright/CameraSource.cpp b/media/libstagefright/CameraSource.cpp
+-index 3671aac..1c70efa 100644
+---- a/media/libstagefright/CameraSource.cpp
+-+++ b/media/libstagefright/CameraSource.cpp
+-@@ -564,11 +564,14 @@ status_t CameraSource::initWithCameraAccess(
+-     // By default, do not store metadata in video buffers
+-     mIsMetaDataStoredInVideoBuffers = false;
+-     mCamera->storeMetaDataInBuffers(false);
+-+
+-+#ifndef NO_METADATA_IN_VIDEO_BUFFERS
+-     if (storeMetaDataInVideoBuffers) {
+-         if (OK == mCamera->storeMetaDataInBuffers(true)) {
+-             mIsMetaDataStoredInVideoBuffers = true;
+-         }
+-     }
+-+#endif
+- 
+-     int64_t glitchDurationUs = (1000000LL / mVideoFrameRate);
+-     if (glitchDurationUs > mGlitchDurationThresholdUs) {
+--- 
+-2.4.6
+-
+diff --git a/patches/frameworks_base/0001-Cyanogen-fix-for-deep-sleep-and-latest-play-services.patch b/patches/frameworks_base/0001-Cyanogen-fix-for-deep-sleep-and-latest-play-services.patch
+deleted file mode 100644
+index 4a8f000..0000000
+--- a/patches/frameworks_base/0001-Cyanogen-fix-for-deep-sleep-and-latest-play-services.patch
++++ /dev/null
+@@ -1,129 +0,0 @@
+-From 0dcf11c699abfbf5960e2cf6584d085d87352a07 Mon Sep 17 00:00:00 2001
+-From: Gianmarco Reverberi <gianmarco.reverberi@gmail.com>
+-Date: Mon, 16 Mar 2015 20:02:15 +0100
+-Subject: [PATCH] Cyanogen fix for deep sleep and latest play services [1/2]
+-
+-SystemUpdateService: enable service but lock its receivers [1/2]
+-
+-Added a check for ensure that disabled components are not
+-re-enabled at runtime
+-
+-Added code for forcing enable of previously disabled components
+-
+-Change-Id: I4da4d9b3ee01e262955dfb2cf739bfcd724df42a
+----
+- core/res/res/values/config.xml                     |  8 +++++
+- core/res/res/values/slim_symbols.xml               |  4 +++
+- .../android/server/pm/PackageManagerService.java   | 41 ++++++++++++++++++++++
+- 3 files changed, 53 insertions(+)
+-
+-diff --git a/core/res/res/values/config.xml b/core/res/res/values/config.xml
+-index ff0632f..09b9986 100755
+---- a/core/res/res/values/config.xml
+-+++ b/core/res/res/values/config.xml
+-@@ -2241,6 +2241,14 @@
+-     <!-- Use ERI text for network name on CDMA LTE -->
+-     <bool name="config_LTE_eri_for_network_name">true</bool>
+- 
+-+    <!-- The list of components which should be automatically disabled. -->
+-+    <string-array name="config_disabledComponents" translatable="false">
+-+    </string-array>
+-+
+-+    <!-- The list of components which should be forced to be enabled. -->
+-+    <string-array name="config_forceEnabledComponents" translatable="false">
+-+    </string-array>
+-+
+-     <!-- Whether to start in touch mode -->
+-     <bool name="config_defaultInTouchMode">true</bool>
+- 
+-diff --git a/core/res/res/values/slim_symbols.xml b/core/res/res/values/slim_symbols.xml
+-index ad52b49..c8fcb28 100644
+---- a/core/res/res/values/slim_symbols.xml
+-+++ b/core/res/res/values/slim_symbols.xml
+-@@ -17,6 +17,10 @@
+- -->
+- <resources>
+- 
+-+  <!-- Package Manager -->
+-+  <java-symbol type="array" name="config_disabledComponents" />
+-+  <java-symbol type="array" name="config_forceEnabledComponents" />
+-+
+-   <!-- Privacy Guard -->
+-   <java-symbol type="drawable" name="stat_notify_privacy_guard" />
+-   <java-symbol type="string" name="privacy_guard_notification" />
+-diff --git a/services/core/java/com/android/server/pm/PackageManagerService.java b/services/core/java/com/android/server/pm/PackageManagerService.java
+-index 1fe68e7..6999cd4 100755
+---- a/services/core/java/com/android/server/pm/PackageManagerService.java
+-+++ b/services/core/java/com/android/server/pm/PackageManagerService.java
+-@@ -500,6 +500,8 @@ public class PackageManagerService extends IPackageManager.Stub {
+- 
+-     private AppOpsManager mAppOps;
+- 
+-+    ArrayList<ComponentName> mDisabledComponentsList;
+-+
+-     // Set of pending broadcasts for aggregating enable/disable of components.
+-     static class PendingPackageBroadcasts {
+-         // for each user id, a map of <package name -> components within that package>
+-@@ -1824,6 +1826,38 @@ public class PackageManagerService extends IPackageManager.Stub {
+-                 mSettings.mFingerprint = Build.FINGERPRINT;
+-             }
+- 
+-+            // Disable components marked for disabling at build-time
+-+            mDisabledComponentsList = new ArrayList<ComponentName>();
+-+            for (String name : mContext.getResources().getStringArray(
+-+                    com.android.internal.R.array.config_disabledComponents)) {
+-+                ComponentName cn = ComponentName.unflattenFromString(name);
+-+                mDisabledComponentsList.add(cn);
+-+                Slog.v(TAG, "Disabling " + name);
+-+                String className = cn.getClassName();
+-+                PackageSetting pkgSetting = mSettings.mPackages.get(cn.getPackageName());
+-+                if (pkgSetting == null || pkgSetting.pkg == null
+-+                        || !pkgSetting.pkg.hasComponentClassName(className)) {
+-+                    Slog.w(TAG, "Unable to disable " + name);
+-+                    continue;
+-+                }
+-+                pkgSetting.disableComponentLPw(className, UserHandle.USER_OWNER);
+-+            }
+-+
+-+            // Enable components marked for forced-enable at build-time
+-+            for (String name : mContext.getResources().getStringArray(
+-+                    com.android.internal.R.array.config_forceEnabledComponents)) {
+-+                ComponentName cn = ComponentName.unflattenFromString(name);
+-+                Slog.v(TAG, "Enabling " + name);
+-+                String className = cn.getClassName();
+-+                PackageSetting pkgSetting = mSettings.mPackages.get(cn.getPackageName());
+-+                if (pkgSetting == null || pkgSetting.pkg == null
+-+                        || !pkgSetting.pkg.hasComponentClassName(className)) {
+-+                    Slog.w(TAG, "Unable to enable " + name);
+-+                    continue;
+-+                }
+-+                pkgSetting.enableComponentLPw(className, UserHandle.USER_OWNER);
+-+            }
+-+
+-             // All the changes are done during package scanning.
+-             mSettings.updateInternalDatabaseVersion();
+- 
+-@@ -12225,6 +12259,12 @@ public class PackageManagerService extends IPackageManager.Stub {
+-     public void setComponentEnabledSetting(ComponentName componentName,
+-             int newState, int flags, int userId) {
+-         if (!sUserManager.exists(userId)) return;
+-+        // Don't allow to enable components marked for disabling at build-time
+-+        if (mDisabledComponentsList.contains(componentName)) {
+-+            Slog.d(TAG, "Ignoring attempt to set enabled state of disabled component "
+-+                    + componentName.flattenToString());
+-+            return;
+-+        }
+-         setEnabledSetting(componentName.getPackageName(),
+-                 componentName.getClassName(), newState, flags, userId, null);
+-     }
+-@@ -12239,6 +12279,7 @@ public class PackageManagerService extends IPackageManager.Stub {
+-             throw new IllegalArgumentException("Invalid new component state: "
+-                     + newState);
+-         }
+-+
+-         PackageSetting pkgSetting;
+-         final int uid = Binder.getCallingUid();
+-         final int permission = mContext.checkCallingOrSelfPermission(
+--- 
+-2.4.2
+-
+diff --git a/patches/frameworks_native/0001-Select-texture-target-based-on-pixel-format.patch b/patches/frameworks_native/0001-Select-texture-target-based-on-pixel-format.patch
+deleted file mode 100644
+index 148029f..0000000
+--- a/patches/frameworks_native/0001-Select-texture-target-based-on-pixel-format.patch
++++ /dev/null
+@@ -1,198 +0,0 @@
+-From f50f7c8ca1805464b811e08106599686dfbf8693 Mon Sep 17 00:00:00 2001
+-From: Kyle Harrison <khwebmail@gmail.com>
+-Date: Fri, 13 Feb 2015 20:16:18 +0000
+-Subject: [PATCH] Select texture target based on pixel format
+-
+-Adreno is not optimized for GL_TEXTURE_EXTERNAL_OES, making GPU
+-utilization (and power), high with GL_TEXTURE_EXTERNAL_OES for
+-RGB formats.
+-
+-Change texture target from GL_EXTERNAL_TEXTURE_OES to dynamically
+-select between GL_EXTERNAL_TEXTURE_OES, and GL_TEXTURE_2D based
+-on the pixel format.
+-
+-This change is done to reduce the composition time for 8x55
+-
+-Change-Id: I6675eec6802caa0f862dd551608e4cc92a6b61bb
+----
+- include/gui/GLConsumer.h                           |  6 ++++
+- libs/gui/Android.mk                                |  4 +++
+- services/surfaceflinger/Android.mk                 |  4 +++
+- services/surfaceflinger/Layer.cpp                  |  5 ++++
+- .../RenderEngine/GLES11RenderEngine.cpp            |  6 ++++
+- services/surfaceflinger/SurfaceFlingerConsumer.cpp | 33 ++++++++++++++++++++++
+- services/surfaceflinger/SurfaceFlingerConsumer.h   |  7 +++++
+- 7 files changed, 65 insertions(+)
+-
+-diff --git a/include/gui/GLConsumer.h b/include/gui/GLConsumer.h
+-index e03de45..5687bbe 100644
+---- a/include/gui/GLConsumer.h
+-+++ b/include/gui/GLConsumer.h
+-@@ -429,7 +429,13 @@ private:
+-     // glCopyTexSubImage to read from the texture.  This is a hack to work
+-     // around a GL driver limitation on the number of FBO attachments, which the
+-     // browser's tile cache exceeds.
+-+#ifdef DECIDE_TEXTURE_TARGET
+-+protected:
+-+    uint32_t mTexTarget;
+-+private:
+-+#else
+-     const uint32_t mTexTarget;
+-+#endif
+- 
+-     // EGLSlot contains the information and object references that
+-     // GLConsumer maintains about a BufferQueue buffer slot.
+-diff --git a/libs/gui/Android.mk b/libs/gui/Android.mk
+-index 9770da2..f810f0c 100644
+---- a/libs/gui/Android.mk
+-+++ b/libs/gui/Android.mk
+-@@ -68,6 +68,10 @@ ifeq ($(TARGET_BOARD_PLATFORM), tegra3)
+- 	LOCAL_CFLAGS += -DDONT_USE_FENCE_SYNC
+- endif
+- 
+-+ifeq ($(BOARD_ADRENO_DECIDE_TEXTURE_TARGET),true)
+-+	LOCAL_CFLAGS += -DDECIDE_TEXTURE_TARGET
+-+endif
+-+
+- ifeq ($(TARGET_SAMSUNG_GRALLOC_EXTERNAL_USECASES),true)
+- 	LOCAL_CFLAGS += -DSAMSUNG_GRALLOC_EXTERNAL_USECASES
+- endif
+-diff --git a/services/surfaceflinger/Android.mk b/services/surfaceflinger/Android.mk
+-index e8b0ad1..3a04293 100644
+---- a/services/surfaceflinger/Android.mk
+-+++ b/services/surfaceflinger/Android.mk
+-@@ -93,6 +93,10 @@ else
+-     LOCAL_CFLAGS += -DMAX_VIRTUAL_DISPLAY_DIMENSION=0
+- endif
+- 
+-+ifeq ($(BOARD_ADRENO_DECIDE_TEXTURE_TARGET),true)
+-+    LOCAL_CFLAGS += -DDECIDE_TEXTURE_TARGET
+-+endif
+-+
+- LOCAL_CFLAGS += -fvisibility=hidden -Werror=format
+- LOCAL_CFLAGS += -std=c++11
+- 
+-diff --git a/services/surfaceflinger/Layer.cpp b/services/surfaceflinger/Layer.cpp
+-index 0d8b009..17882be 100755
+---- a/services/surfaceflinger/Layer.cpp
+-+++ b/services/surfaceflinger/Layer.cpp
+-@@ -1419,8 +1419,13 @@ Region Layer::latchBuffer(bool& recomputeVisibleRegions)
+-         Reject r(mDrawingState, getCurrentState(), recomputeVisibleRegions,
+-                 getProducerStickyTransform() != 0);
+- 
+-+#ifdef DECIDE_TEXTURE_TARGET
+-+        status_t updateResult = mSurfaceFlingerConsumer->updateTexImage(&r,
+-+                mFlinger->mPrimaryDispSync, &mTexture);
+-+#else
+-         status_t updateResult = mSurfaceFlingerConsumer->updateTexImage(&r,
+-                 mFlinger->mPrimaryDispSync);
+-+#endif
+-         if (updateResult == BufferQueue::PRESENT_LATER) {
+-             // Producer doesn't want buffer to be displayed yet.  Signal a
+-             // layer update so we check again at the next opportunity.
+-diff --git a/services/surfaceflinger/RenderEngine/GLES11RenderEngine.cpp b/services/surfaceflinger/RenderEngine/GLES11RenderEngine.cpp
+-index ccafeac..1dc6b85 100644
+---- a/services/surfaceflinger/RenderEngine/GLES11RenderEngine.cpp
+-+++ b/services/surfaceflinger/RenderEngine/GLES11RenderEngine.cpp
+-@@ -208,8 +208,14 @@ void GLES11RenderEngine::setupLayerTexturing(const Texture& texture) {
+-     glMatrixMode(GL_TEXTURE);
+-     glLoadMatrixf(texture.getMatrix().asArray());
+-     glMatrixMode(GL_MODELVIEW);
+-+#ifdef DECIDE_TEXTURE_TARGET
+-+    glDisable((target == Texture::TEXTURE_2D) ?
+-+            GL_TEXTURE_EXTERNAL_OES : GL_TEXTURE_2D);
+-+    glEnable(target);
+-+#else
+-     glDisable(GL_TEXTURE_2D);
+-     glEnable(GL_TEXTURE_EXTERNAL_OES);
+-+#endif
+- }
+- 
+- void GLES11RenderEngine::setupLayerBlackedOut() {
+-diff --git a/services/surfaceflinger/SurfaceFlingerConsumer.cpp b/services/surfaceflinger/SurfaceFlingerConsumer.cpp
+-index 7de6ac4..dcf00d2 100644
+---- a/services/surfaceflinger/SurfaceFlingerConsumer.cpp
+-+++ b/services/surfaceflinger/SurfaceFlingerConsumer.cpp
+-@@ -25,13 +25,24 @@
+- #include <utils/NativeHandle.h>
+- #include <utils/Trace.h>
+- 
+-+#ifdef DECIDE_TEXTURE_TARGET
+-+#include <GLES2/gl2.h>
+-+#include <GLES2/gl2ext.h>
+-+#endif
+-+
+- namespace android {
+- 
+- // ---------------------------------------------------------------------------
+- 
+-+#ifdef DECIDE_TEXTURE_TARGET
+-+status_t SurfaceFlingerConsumer::updateTexImage(BufferRejecter* rejecter,
+-+        const DispSync& dispSync, Texture* mTexture)
+-+{
+-+#else
+- status_t SurfaceFlingerConsumer::updateTexImage(BufferRejecter* rejecter,
+-         const DispSync& dispSync)
+- {
+-+#endif
+-     ATRACE_CALL();
+-     ALOGV("updateTexImage");
+-     Mutex::Autolock lock(mMutex);
+-@@ -75,6 +86,28 @@ status_t SurfaceFlingerConsumer::updateTexImage(BufferRejecter* rejecter,
+-         return NO_ERROR;
+-     }
+- 
+-+    #ifdef DECIDE_TEXTURE_TARGET
+-+    // GPU is not efficient in handling GL_TEXTURE_EXTERNAL_OES
+-+    // texture target. Depending on the image format, decide,
+-+    // the texture target to be used
+-+    if (mTexture) {
+-+        switch (mSlots[buf].mGraphicBuffer->format) {
+-+            case HAL_PIXEL_FORMAT_RGBA_8888:
+-+            case HAL_PIXEL_FORMAT_RGBX_8888:
+-+            case HAL_PIXEL_FORMAT_RGB_888:
+-+            case HAL_PIXEL_FORMAT_RGB_565:
+-+            case HAL_PIXEL_FORMAT_BGRA_8888:
+-+                mTexture->init(Texture::TEXTURE_2D, mTexture->getTextureName());
+-+                mTexTarget = GL_TEXTURE_2D;
+-+                break;
+-+            default:
+-+                mTexture->init(Texture::TEXTURE_EXTERNAL, mTexture->getTextureName());
+-+                mTexTarget = GL_TEXTURE_EXTERNAL_OES;
+-+                break;
+-+        }
+-+    }
+-+#endif
+-+
+-     // Release the previous buffer.
+-     err = updateAndReleaseLocked(item);
+-     if (err != NO_ERROR) {
+-diff --git a/services/surfaceflinger/SurfaceFlingerConsumer.h b/services/surfaceflinger/SurfaceFlingerConsumer.h
+-index 28f2f6a..f2038d2 100644
+---- a/services/surfaceflinger/SurfaceFlingerConsumer.h
+-+++ b/services/surfaceflinger/SurfaceFlingerConsumer.h
+-@@ -19,6 +19,9 @@
+- 
+- #include "DispSync.h"
+- #include <gui/GLConsumer.h>
+-+#ifdef DECIDE_TEXTURE_TARGET
+-+#include "RenderEngine/Texture.h"
+-+#endif
+- 
+- namespace android {
+- // ----------------------------------------------------------------------------
+-@@ -53,7 +56,11 @@ public:
+-     // reject the newly acquired buffer.  Unlike the GLConsumer version,
+-     // this does not guarantee that the buffer has been bound to the GL
+-     // texture.
+-+#ifdef DECIDE_TEXTURE_TARGET
+-+    status_t updateTexImage(BufferRejecter* rejecter, const DispSync& dispSync, Texture* mTexture = 0);
+-+#else
+-     status_t updateTexImage(BufferRejecter* rejecter, const DispSync& dispSync);
+-+#endif
+- 
+-     // See GLConsumer::bindTextureImageLocked().
+-     status_t bindTextureImage();
+--- 
+-2.3.6
+-
+diff --git a/patches/hardware_libhardware_legacy/0001-custom-wifi.patch b/patches/hardware_libhardware_legacy/0001-custom-wifi.patch
+deleted file mode 100644
+index 12007ef..0000000
+--- a/patches/hardware_libhardware_legacy/0001-custom-wifi.patch
++++ /dev/null
+@@ -1,32 +0,0 @@
+-From ee1add6e15b976cb64f90707a5a5bf2b66945a23 Mon Sep 17 00:00:00 2001
+-From: Daz Jones <yuki@thebronasium.com>
+-Date: Sat, 27 Jul 2013 02:40:36 +0100
+-Subject: [PATCH] wifi: add support for custom Wi-Fi implementations
+-
+-Change-Id: Id464138cdb679fc4550914a32d9c71131bdfffb3
+----
+- wifi/Android.mk | 8 +++++++-
+- 1 file changed, 7 insertions(+), 1 deletion(-)
+-
+-diff --git a/wifi/Android.mk b/wifi/Android.mk
+-index ad9f2c9..859b9bd 100644
+---- a/wifi/Android.mk
+-+++ b/wifi/Android.mk
+-@@ -37,7 +37,13 @@ ifdef WIFI_EXT_MODULE_NAME
+- LOCAL_CFLAGS += -DWIFI_EXT_MODULE_NAME=\"$(WIFI_EXT_MODULE_NAME)\"
+- endif
+- 
+--LOCAL_SRC_FILES += wifi/wifi.c
+-+ifeq ($(TARGET_CUSTOM_WIFI),)
+-+       LOCAL_SRC_FILES += \
+-+               wifi/wifi.c
+-+else
+-+       LOCAL_SRC_FILES += \
+-+               $(TARGET_CUSTOM_WIFI)
+-+endif
+- 
+- ifdef WPA_SUPPLICANT_VERSION
+- LOCAL_CFLAGS += -DLIBWPA_CLIENT_EXISTS
+--- 
+-2.3.1
+-
+diff --git a/patches/packages_apps_Settings/0001-vold-switchable-pair.patch b/patches/packages_apps_Settings/0001-vold-switchable-pair.patch
+deleted file mode 100644
+index d90a389..0000000
+--- a/patches/packages_apps_Settings/0001-vold-switchable-pair.patch
++++ /dev/null
+@@ -1,155 +0,0 @@
+-From 15cec631dc24a505c6ca3e8b244248a8bce7ebc1 Mon Sep 17 00:00:00 2001
+-From: Kyle Harrison <khwebmail@gmail.com>
+-Date: Mon, 24 Nov 2014 00:53:10 +0000
+-Subject: [PATCH] Add setting for vold switchable pair
+-
+-Change-Id: Ie697b747d3b8a1a09b2a1c52aa653393f6172f0c
+----
+- res/values/slim_strings.xml                     |  7 ++++
+- res/xml/device_info_memory.xml                  |  6 +++
+- src/com/android/settings/deviceinfo/Memory.java | 53 ++++++++++++++++++++++++-
+- 3 files changed, 65 insertions(+), 1 deletion(-)
+-
+-diff --git a/res/values/slim_strings.xml b/res/values/slim_strings.xml
+-index d7847e3..fff9d6d 100644
+---- a/res/values/slim_strings.xml
+-+++ b/res/values/slim_strings.xml
+-@@ -53,6 +53,13 @@
+-     <string name="root_access_adb">ADB only</string>
+-     <string name="root_access_all">Apps and ADB</string>
+- 
+-+    <!-- Vold Switchable Pair -->
+-+    <string name="storage_switch_title">Use external SD as primary</string>
+-+    <string name="storage_switch_summary_off">Using expanded internal storage for apps and media</string>
+-+    <string name="storage_switch_summary_on">Using SD Card for apps and media</string>
+-+    <string name="reboot_prompt_title">Reboot required</string>
+-+    <string name="reboot_prompt_message">In order to apply the changed configuration, a reboot is required.\n\nDo you want to reboot now?</string>
+-+
+-     <!-- App ops -->
+-     <string name="app_ops_summaries_coarse_location">coarse location</string>
+-     <string name="app_ops_summaries_fine_location">fine location</string>
+-diff --git a/res/xml/device_info_memory.xml b/res/xml/device_info_memory.xml
+-index 36da89e..26d464f 100644
+---- a/res/xml/device_info_memory.xml
+-+++ b/res/xml/device_info_memory.xml
+-@@ -19,6 +19,12 @@
+-         android:title="@string/storage_settings"
+-         settings:keywords="@string/keywords_storage">
+- 
+-+    <SwitchPreference
+-+        android:key="key_switch_storage"
+-+        android:title="@string/storage_switch_title"
+-+        android:summaryOn="@string/storage_switch_summary_on"
+-+        android:summaryOff="@string/storage_switch_summary_off" />
+-+
+- <!-- Preference categories are dynamically created based on the list of available storage volumes -->
+- 
+-     <PreferenceCategory
+-diff --git a/src/com/android/settings/deviceinfo/Memory.java b/src/com/android/settings/deviceinfo/Memory.java
+-index b788324..f0027eb 100644
+---- a/src/com/android/settings/deviceinfo/Memory.java
+-+++ b/src/com/android/settings/deviceinfo/Memory.java
+-@@ -32,21 +32,25 @@ import android.hardware.usb.UsbManager;
+- import android.os.Bundle;
+- import android.os.Environment;
+- import android.os.IBinder;
+-+import android.os.PowerManager;
+- import android.os.RemoteException;
+- import android.os.ServiceManager;
+- import android.os.UserHandle;
+-+import android.os.SystemProperties;
+- import android.os.UserManager;
+- import android.os.storage.IMountService;
+- import android.os.storage.StorageEventListener;
+- import android.os.storage.StorageManager;
+- import android.os.storage.StorageVolume;
+- import android.os.SystemProperties;
+-+import android.preference.SwitchPreference;
+- import android.preference.ListPreference;
+- import android.preference.Preference;
+- import android.preference.PreferenceCategory;
+- import android.preference.PreferenceScreen;
+- import android.preference.Preference.OnPreferenceChangeListener;
+- import android.provider.Settings;
+-+import android.text.TextUtils;
+- import android.util.Log;
+- import android.view.Menu;
+- import android.view.MenuInflater;
+-@@ -97,6 +101,10 @@ public class Memory extends SettingsPreferenceFragment
+-     private UsbManager mUsbManager;
+- 
+-     private ArrayList<StorageVolumePreferenceCategory> mCategories = Lists.newArrayList();
+-+    private static final String KEY_SWITCH_STORAGE = "key_switch_storage";
+-+    private static final String VOLD_SWITCH_PERSIST_PROP = "persist.sys.vold.switchexternal";
+-+    private static final String VOLD_SWITCHABLEPAIR_PROP = "persist.sys.vold.switchablepair";
+-+    private SwitchPreference mSwitchStoragePref;
+- 
+-     @Override
+-     public void onCreate(Bundle icicle) {
+-@@ -111,6 +119,27 @@ public class Memory extends SettingsPreferenceFragment
+- 
+-         addPreferencesFromResource(R.xml.device_info_memory);
+- 
+-+        String voldswitch = SystemProperties.get(VOLD_SWITCH_PERSIST_PROP, "0");
+-+        mSwitchStoragePref = (SwitchPreference) findPreference(KEY_SWITCH_STORAGE);
+-+        mSwitchStoragePref.setChecked("1".equals(voldswitch));
+-+        if (!Environment.isExternalStorageEmulated()) {
+-+            Log.i(TAG, "Checking to see if vold switch is possible on this device.");
+-+            String PRIMARY_STORAGE = System.getenv("EXTERNAL_STORAGE");
+-+            String SECONDARY_STORAGE = System.getenv("SECONDARY_STORAGE");
+-+            if (!TextUtils.isEmpty(PRIMARY_STORAGE) && !TextUtils.isEmpty(SECONDARY_STORAGE)) {
+-+                SystemProperties.set(VOLD_SWITCHABLEPAIR_PROP, PRIMARY_STORAGE + ',' +
+-+                        SECONDARY_STORAGE);
+-+                Log.i(TAG, "Setting persist.sys.vold.switchablepair=" + PRIMARY_STORAGE + ',' +
+-+                        SECONDARY_STORAGE);
+-+            } else {
+-+                Log.i(TAG, "Vold switch not possible on this device.");
+-+            }
+-+        }
+-+
+-+        if (SystemProperties.get(VOLD_SWITCHABLEPAIR_PROP).equals("")) {
+-+            removePreference(KEY_SWITCH_STORAGE);
+-+        }
+-+
+-         addCategory(StorageVolumePreferenceCategory.buildForInternal(context));
+- 
+-         final StorageVolume[] storageVolumes = mStorageManager.getVolumeList();
+-@@ -265,7 +294,13 @@ public class Memory extends SettingsPreferenceFragment
+- 
+-     @Override
+-     public boolean onPreferenceTreeClick(PreferenceScreen preferenceScreen, Preference preference) {
+--        if (StorageVolumePreferenceCategory.KEY_CACHE.equals(preference.getKey())) {
+-+        if(preference == mSwitchStoragePref) {
+-+            Log.d(TAG,"Setting persist.sys.vold.switchexternal to "+(
+-+                    mSwitchStoragePref.isChecked() ? "1" : "0"));
+-+            SystemProperties.set(VOLD_SWITCH_PERSIST_PROP,
+-+                    mSwitchStoragePref.isChecked() ? "1" : "0");
+-+            showRebootPrompt();
+-+        } else if (StorageVolumePreferenceCategory.KEY_CACHE.equals(preference.getKey())) {
+-             ConfirmClearCacheFragment.show(this);
+-             return true;
+-         }
+-@@ -598,4 +633,20 @@ public class Memory extends SettingsPreferenceFragment
+-             }
+-         };
+- 
+-+    private void showRebootPrompt() {
+-+        AlertDialog dialog = new AlertDialog.Builder(getActivity())
+-+                .setTitle(R.string.reboot_prompt_title)
+-+                .setMessage(R.string.reboot_prompt_message)
+-+                .setPositiveButton(R.string.yes, new DialogInterface.OnClickListener() {
+-+                    @Override
+-+                    public void onClick(DialogInterface dialog, int which) {
+-+                        PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+-+                        pm.reboot(null);
+-+                    }
+-+                })
+-+                .setNegativeButton(R.string.no, null)
+-+                .create();
+-+
+-+        dialog.show();
+-+    }
+- }
+--- 
+-2.3.6
+-
+diff --git a/patches/system_core/0001-Add-path-for-wifi-firmware.patch b/patches/system_core/0001-Add-path-for-wifi-firmware.patch
+deleted file mode 100644
+index 0a682b8..0000000
+--- a/patches/system_core/0001-Add-path-for-wifi-firmware.patch
++++ /dev/null
+@@ -1,90 +0,0 @@
+-From 5b67e469dead7125d766d6581d096ac078b03872 Mon Sep 17 00:00:00 2001
+-From: Kyle Harrison <khwebmail@gmail.com>
+-Date: Sat, 22 Aug 2015 18:57:31 +0100
+-Subject: [PATCH] Add path for wifi firmware
+-
+-Change-Id: Ia3babbded49f0a3ae959655e84c43f1b7bcf14b7
+----
+- init/devices.c | 37 +++++++++++++++++++++++--------------
+- 1 file changed, 23 insertions(+), 14 deletions(-)
+-
+-diff --git a/init/devices.c b/init/devices.c
+-index 05f0aef..36ff9eb 100644
+---- a/init/devices.c
+-+++ b/init/devices.c
+-@@ -54,7 +54,8 @@
+- #define SYSFS_PREFIX    "/sys"
+- #define FIRMWARE_DIR1   "/etc/firmware"
+- #define FIRMWARE_DIR2   "/vendor/firmware"
+--#define FIRMWARE_DIR3   "/firmware/image"
+-+#define FIRMWARE_DIR3   "/system/wifi"
+-+#define FIRMWARE_DIR4   "/data/misc/wifi"
+- #define DEVICES_BASE    "/devices/soc.0"
+- 
+- extern struct selabel_handle *sehandle;
+-@@ -1029,7 +1030,7 @@ out:
+- 
+- static void process_firmware_event(struct uevent *uevent)
+- {
+--    char *root, *loading, *data, *file1 = NULL, *file2 = NULL, *file3 = NULL;
+-+    char *root, *loading, *data, *file1 = NULL, *file2 = NULL, *file3 = NULL, *file4 = NULL;
+-     int l, loading_fd, data_fd, fw_fd;
+-     int booting = is_booting();
+-     gzFile gz_fd = NULL;
+-@@ -1061,6 +1062,10 @@ static void process_firmware_event(struct uevent *uevent)
+-     if (l == -1)
+-         goto data_free_out;
+- 
+-+    l = asprintf(&file4, FIRMWARE_DIR4"/%s", uevent->firmware);
+-+    if (l == -1)
+-+        goto data_free_out;
+-+
+-     loading_fd = open(loading, O_WRONLY);
+-     if(loading_fd < 0)
+-         goto file_free_out;
+-@@ -1076,19 +1081,22 @@ try_loading_again:
+-         if (fw_fd < 0) {
+-             fw_fd = open(file3, O_RDONLY);
+-             if (fw_fd < 0) {
+--                gz_fd = fw_gzopen(uevent->firmware, "rb");
+--                if (!gz_fd) {
+--                    if (booting || (access("/system/etc/firmware", F_OK) != 0)) {
+--                            /* If we're not fully booted, we may be missing
+--                             * filesystems needed for firmware, wait and retry.
+--                             */
+--                        usleep(100000);
+--                        booting = is_booting();
+--                        goto try_loading_again;
+-+                fw_fd = open(file4, O_RDONLY);
+-+                if (fw_fd < 0) {
+-+                    gz_fd = fw_gzopen(uevent->firmware, "rb");
+-+                    if (!gz_fd) {
+-+                        if (booting || (access("/system/etc/firmware", F_OK) != 0)) {
+-+                                /* If we're not fully booted, we may be missing
+-+                                 * filesystems needed for firmware, wait and retry.
+-+                                 */
+-+                            usleep(100000);
+-+                            booting = is_booting();
+-+                            goto try_loading_again;
+-+                        }
+-+                        INFO("firmware: could not open '%s' %d\n", uevent->firmware, errno);
+-+                        write(loading_fd, "-1", 2);
+-+                        goto data_close_out;
+-                     }
+--                    INFO("firmware: could not open '%s' %d\n", uevent->firmware, errno);
+--                    write(loading_fd, "-1", 2);
+--                    goto data_close_out;
+-                 }
+-             }
+-         }
+-@@ -1111,6 +1119,7 @@ file_free_out:
+-     free(file1);
+-     free(file2);
+-     free(file3);
+-+    free(file4);
+- data_free_out:
+-     free(data);
+- loading_free_out:
+--- 
+-2.5.0
+-
+diff --git a/patches/system_netd/0001-Update-Huawei-SoftapControllerATH-for-5.0.patch b/patches/system_netd/0001-Update-Huawei-SoftapControllerATH-for-5.0.patch
+deleted file mode 100644
+index b5ddfaa..0000000
+--- a/patches/system_netd/0001-Update-Huawei-SoftapControllerATH-for-5.0.patch
++++ /dev/null
+@@ -1,927 +0,0 @@
+-From 60084ba40b4ee07d0476dcea980ca79b3d2ffdf5 Mon Sep 17 00:00:00 2001
+-From: Kyle Harrison <khwebmail@gmail.com>
+-Date: Mon, 24 Nov 2014 15:47:03 +0000
+-Subject: [PATCH] Update Huawei SoftapControllerATH for 5.0
+-
+----
+- server/Android.mk              |  13 +-
+- server/CommandListener.cpp     |  11 +-
+- server/SoftapController.h      |   8 +
+- server/SoftapControllerATH.cpp | 817 +++++++++++++++++++++++++++++++++++++++++
+- 4 files changed, 845 insertions(+), 3 deletions(-)
+- create mode 100644 server/SoftapControllerATH.cpp
+-
+-diff --git a/server/Android.mk b/server/Android.mk
+-index fc85fa4..6aff06b 100755
+---- a/server/Android.mk
+-+++ b/server/Android.mk
+-@@ -25,7 +25,7 @@ LOCAL_C_INCLUDES := \
+-         system/netd/include \
+- 
+- LOCAL_CLANG := true
+--LOCAL_CPPFLAGS := -std=c++11 -Wall -Werror
+-+LOCAL_CPPFLAGS := -std=c++11 -Wall -Werror -Wno-unused-variable -Wno-unused-parameter -Wno-unused-function
+- LOCAL_MODULE := netd
+- 
+- LOCAL_SHARED_LIBRARIES := \
+-@@ -61,7 +61,6 @@ LOCAL_SRC_FILES := \
+-         PppController.cpp \
+-         ResolverController.cpp \
+-         RouteController.cpp \
+--        SoftapController.cpp \
+-         TetherController.cpp \
+-         UidRanges.cpp \
+-         VirtualNetwork.cpp \
+-@@ -83,6 +82,16 @@ ifdef WPA_SUPPLICANT_VERSION
+-   LOCAL_C_INCLUDES += external/wpa_supplicant_8/src/common
+- endif
+- 
+-+ifeq ($(BOARD_HAS_ATH_WLAN),true)
+-+  LOCAL_CFLAGS += -DATH_WLAN
+-+  LOCAL_CFLAGS += -DWIFI_MODULE_PATH=\"$(WIFI_DRIVER_MODULE_PATH)\"
+-+  LOCAL_C_INCLUDES += external/wpa_supplicant_8/wpa_supplicant/src/common
+-+  LOCAL_SRC_FILES += SoftapControllerATH.cpp
+-+  LOCAL_SHARED_LIBRARIES := $(LOCAL_SHARED_LIBRARIES) libwpa_client
+-+else
+-+   LOCAL_SRC_FILES += SoftapController.cpp
+-+endif
+-+
+- include $(BUILD_EXECUTABLE)
+- 
+- include $(CLEAR_VARS)
+-diff --git a/server/CommandListener.cpp b/server/CommandListener.cpp
+-index d6d7ca6..b29bd7f 100644
+---- a/server/CommandListener.cpp
+-+++ b/server/CommandListener.cpp
+-@@ -873,9 +873,18 @@ int CommandListener::SoftapCmd::runCommand(SocketClient *cli,
+-                      "Missing argument in a SoftAP command", false);
+-         return 0;
+-     }
+--
+-+    
+-+#ifdef ATH_WLAN
+-+    if (!strcmp(argv[1], "start")) {
+-+        rc = sSoftapCtrl->startDriver(argv[2]);
+-+    } else if (!strcmp(argv[1], "stop")) {
+-+        rc = sSoftapCtrl->stopDriver(argv[2]);
+-+    } else if (!strcmp(argv[1], "startap")) {
+-+        rc = sSoftapCtrl->startSoftap();
+-+#else
+-     if (!strcmp(argv[1], "startap")) {
+-         rc = sSoftapCtrl->startSoftap();
+-+#endif
+-     } else if (!strcmp(argv[1], "stopap")) {
+-         rc = sSoftapCtrl->stopSoftap();
+-     } else if (!strcmp(argv[1], "fwreload")) {
+-diff --git a/server/SoftapController.h b/server/SoftapController.h
+-index fd53939..a2cc137 100755
+---- a/server/SoftapController.h
+-+++ b/server/SoftapController.h
+-@@ -34,6 +34,10 @@ public:
+-     SoftapController(SocketListener *sl);
+-     virtual ~SoftapController();
+- 
+-+#ifdef ATH_WLAN
+-+    int startDriver(const char *iface);
+-+    int stopDriver(const char *iface);
+-+#endif
+-     int startSoftap();
+-     int stopSoftap();
+-     bool isSoftapStarted();
+-@@ -46,6 +50,10 @@ private:
+-     int mThreadErr;
+-     int mHostapdFlag;
+- #endif
+-+#ifdef ATH_WLAN
+-+    char mBuf[SOFTAP_MAX_BUFFER_SIZE];
+-+    char mIface[IFNAMSIZ];
+-+#endif
+-     pid_t mPid;
+-     void generatePsk(char *ssid, char *passphrase, char *psk);
+- #ifdef LIBWPA_CLIENT_EXISTS
+-diff --git a/server/SoftapControllerATH.cpp b/server/SoftapControllerATH.cpp
+-new file mode 100644
+-index 0000000..34fa285
+---- /dev/null
+-+++ b/server/SoftapControllerATH.cpp
+-@@ -0,0 +1,817 @@
+-+/*
+-+ * Copyright (C) 2008 The Android Open Source Project
+-+ *
+-+ * Licensed under the Apache License, Version 2.0 (the "License");
+-+ * you may not use this file except in compliance with the License.
+-+ * You may obtain a copy of the License at
+-+ *
+-+ *      http://www.apache.org/licenses/LICENSE-2.0
+-+ *
+-+ * Unless required by applicable law or agreed to in writing, software
+-+ * distributed under the License is distributed on an "AS IS" BASIS,
+-+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+-+ * See the License for the specific language governing permissions and
+-+ * limitations under the License.
+-+ */
+-+
+-+#include <stdlib.h>
+-+#include <errno.h>
+-+#include <fcntl.h>
+-+
+-+#include <sys/socket.h>
+-+#include <sys/stat.h>
+-+#include <sys/types.h>
+-+#include <sys/wait.h>
+-+
+-+#include <netinet/in.h>
+-+#include <arpa/inet.h>
+-+
+-+#include <linux/wireless.h>
+-+
+-+#include <openssl/evp.h>
+-+#include <openssl/sha.h>
+-+
+-+#define LOG_TAG "SoftapController"
+-+#include <cutils/log.h>
+-+
+-+#include "SoftapController.h"
+-+#include "ResponseCode.h"
+-+
+-+extern "C" int delete_module(const char *, unsigned int);
+-+extern "C" int init_module(void * , unsigned int, const char *);
+-+extern "C" void *load_file(const char *fn, unsigned *_sz);
+-+
+-+extern "C" int ifc_init();
+-+extern "C" int ifc_up(const char *name);
+-+
+-+#include "private/android_filesystem_config.h"
+-+#include "cutils/properties.h"
+-+#ifdef HAVE_LIBC_SYSTEM_PROPERTIES
+-+#define _REALLY_INCLUDE_SYS__SYSTEM_PROPERTIES_H_
+-+#endif
+-+
+-+#include <sys/_system_properties.h>
+-+#include "wpa_ctrl.h"
+-+
+-+static const char IFACE_DIR[]           = "/data/misc/wifi/hostapd";
+-+static const char HOSTAPD_NAME[]     = "hostapd";
+-+static const char HOSTAPD_CONFIG_TEMPLATE[]= "/system/etc/wifi/hostapd.conf";
+-+static const char HOSTAPD_CONFIG_FILE[]    = "/data/misc/wifi/hostapd.conf";
+-+static const char HOSTAPD_PROP_NAME[]      = "init.svc.hostapd";
+-+
+-+#ifdef WIFI_DRIVER_MODULE_AP_ARG
+-+static const char DRIVER_MODULE_AP_ARG[] = WIFI_DRIVER_MODULE_AP_ARG;
+-+#endif
+-+
+-+#define WIFI_DEFAULT_BI         100         /* in TU */
+-+#define WIFI_DEFAULT_DTIM       1           /* in beacon */
+-+#define WIFI_DEFAULT_CHANNEL    6
+-+#define WIFI_DEFAULT_MAX_STA    8
+-+#define WIFI_DEFAULT_PREAMBLE   0
+-+
+-+static struct wpa_ctrl *ctrl_conn;
+-+static char iface[PROPERTY_VALUE_MAX];
+-+int mProfileValid;
+-+
+-+/* rfkill support borrowed from bluetooth */
+-+static int rfkill_id = -1;
+-+static char *rfkill_state_path = NULL;
+-+
+-+static int init_rfkill() {
+-+    char path[64];
+-+    char buf[16];
+-+    int fd;
+-+    int sz;
+-+    int id;
+-+    for (id = 0; ; id++) {
+-+        snprintf(path, sizeof(path), "/sys/class/rfkill/rfkill%d/type", id);
+-+        fd = open(path, O_RDONLY);
+-+        if (fd < 0) {
+-+            ALOGW("open(%s) failed: %s (%d)\n", path, strerror(errno), errno);
+-+            return -1;
+-+        }
+-+        sz = read(fd, &buf, sizeof(buf));
+-+        close(fd);
+-+        if (sz >= 4 && memcmp(buf, "wlan", 4) == 0) {
+-+            rfkill_id = id;
+-+            break;
+-+        }
+-+    }
+-+
+-+    asprintf(&rfkill_state_path, "/sys/class/rfkill/rfkill%d/state", rfkill_id);
+-+    return 0;
+-+}
+-+
+-+static int check_wifi_power() {
+-+    int sz;
+-+    int fd = -1;
+-+    int ret = -1;
+-+    char buffer;
+-+
+-+    if (rfkill_id == -1) {
+-+        if (init_rfkill()) goto out;
+-+    }
+-+
+-+    fd = open(rfkill_state_path, O_RDONLY);
+-+    if (fd < 0) {
+-+        ALOGE("open(%s) failed: %s (%d)", rfkill_state_path, strerror(errno),
+-+                errno);
+-+        goto out;
+-+    }
+-+    sz = read(fd, &buffer, 1);
+-+    if (sz != 1) {
+-+        ALOGE("read(%s) failed: %s (%d)", rfkill_state_path, strerror(errno),
+-+                errno);
+-+        goto out;
+-+    }
+-+
+-+    switch (buffer) {
+-+        case '1':
+-+            ret = 1;
+-+            break;
+-+        case '0':
+-+            ret = 0;
+-+            break;
+-+    }
+-+
+-+out:
+-+    if (fd >= 0) close(fd);
+-+    return ret;
+-+}
+-+
+-+static int set_wifi_power(int on) {
+-+    int sz;
+-+    int fd = -1;
+-+    int ret = -1;
+-+    const char buffer = (on ? '1' : '0');
+-+
+-+    if (rfkill_id == -1) {
+-+        if (init_rfkill()) goto out;
+-+    }
+-+
+-+    if (check_wifi_power() == on) {
+-+        return 0;
+-+    }
+-+
+-+    fd = open(rfkill_state_path, O_WRONLY);
+-+    if (fd < 0) {
+-+        ALOGE("open(%s) for write failed: %s (%d)", rfkill_state_path,
+-+                strerror(errno), errno);
+-+        goto out;
+-+    }
+-+    /* Give it a few seconds before changing state */
+-+    sleep(3);
+-+    sz = write(fd, &buffer, 1);
+-+    if (sz < 0) {
+-+        ALOGE("write(%s) failed: %s (%d)", rfkill_state_path, strerror(errno),
+-+                errno);
+-+        goto out;
+-+    }
+-+    ret = 0;
+-+
+-+out:
+-+    if (fd >= 0) close(fd);
+-+    return ret;
+-+}
+-+
+-+/* end rfkill support */
+-+
+-+int ensure_config_file_exists()
+-+{
+-+    char buf[2048];
+-+    int srcfd, destfd;
+-+    int nread;
+-+
+-+    if (access(HOSTAPD_CONFIG_FILE, R_OK|W_OK) == 0) {
+-+        return 0;
+-+    } else if (errno != ENOENT) {
+-+        ALOGE("Cannot access \"%s\": %s", HOSTAPD_CONFIG_FILE, strerror(errno));
+-+        return -1;
+-+    }
+-+
+-+    srcfd = open(HOSTAPD_CONFIG_TEMPLATE, O_RDONLY);
+-+    if (srcfd < 0) {
+-+        ALOGE("Cannot open \"%s\": %s", HOSTAPD_CONFIG_TEMPLATE, strerror(errno));
+-+        return -1;
+-+    }
+-+
+-+    destfd = open(HOSTAPD_CONFIG_FILE, O_CREAT|O_WRONLY, 0660);
+-+    if (destfd < 0) {
+-+        close(srcfd);
+-+        ALOGE("Cannot create \"%s\": %s", HOSTAPD_CONFIG_FILE, strerror(errno));
+-+        return -1;
+-+    }
+-+
+-+    while ((nread = read(srcfd, buf, sizeof(buf))) != 0) {
+-+        if (nread < 0) {
+-+            ALOGE("Error reading \"%s\": %s", HOSTAPD_CONFIG_TEMPLATE, strerror(errno));
+-+            close(srcfd);
+-+            close(destfd);
+-+            unlink(HOSTAPD_CONFIG_FILE);
+-+            return -1;
+-+        }
+-+        write(destfd, buf, nread);
+-+    }
+-+
+-+    close(destfd);
+-+    close(srcfd);
+-+
+-+    if (chown(HOSTAPD_CONFIG_FILE, AID_SYSTEM, AID_WIFI) < 0) {
+-+        ALOGE("Error changing group ownership of %s to %d: %s",
+-+             HOSTAPD_CONFIG_FILE, AID_WIFI, strerror(errno));
+-+        unlink(HOSTAPD_CONFIG_FILE);
+-+        return -1;
+-+    }
+-+
+-+    return 0;
+-+}
+-+
+-+int wifi_start_hostapd()
+-+{
+-+    char supp_status[PROPERTY_VALUE_MAX] = {'\0'};
+-+    int count = 300; /* wait at most 30 seconds for completion */
+-+    char mac_buff[15] = {'\0'};
+-+#ifdef HAVE_LIBC_SYSTEM_PROPERTIES
+-+    const prop_info *pi;
+-+    unsigned serial = 0;
+-+#endif
+-+
+-+    /* Check whether already running */
+-+    if (property_get(HOSTAPD_PROP_NAME, supp_status, NULL)
+-+            && strcmp(supp_status, "running") == 0) {
+-+        return 0;
+-+    }
+-+
+-+    /* Clear out any stale socket files that might be left over. */
+-+    wpa_ctrl_cleanup();
+-+
+-+#ifdef HAVE_LIBC_SYSTEM_PROPERTIES
+-+    /*
+-+     * Get a reference to the status property, so we can distinguish
+-+     * the case where it goes stopped => running => stopped (i.e.,
+-+     * it start up, but fails right away) from the case in which
+-+     * it starts in the stopped state and never manages to start
+-+     * running at all.
+-+     */
+-+    pi = __system_property_find(HOSTAPD_PROP_NAME);
+-+    if (pi != NULL) {
+-+        serial = __system_property_serial(pi);
+-+    }
+-+#endif
+-+    property_set("ctl.start", HOSTAPD_NAME);
+-+    sched_yield();
+-+
+-+    while (count-- > 0) {
+-+#ifdef HAVE_LIBC_SYSTEM_PROPERTIES
+-+        if (pi == NULL) {
+-+            pi = __system_property_find(HOSTAPD_PROP_NAME);
+-+        }
+-+        if (pi != NULL) {
+-+            __system_property_read(pi, NULL, supp_status);
+-+            if (strcmp(supp_status, "running") == 0) {
+-+                return 0;
+-+            } else if (__system_property_serial(pi) != serial &&
+-+                    strcmp(supp_status, "stopped") == 0) {
+-+                return -1;
+-+            }
+-+        }
+-+#endif
+-+        usleep(100000);
+-+    }
+-+    return -1;
+-+}
+-+
+-+int wifi_stop_hostapd()
+-+{
+-+    char supp_status[PROPERTY_VALUE_MAX] = {'\0'};
+-+    int count = 50; /* wait at most 5 seconds for completion */
+-+
+-+    /* Check whether hostapd already stopped */
+-+    if (property_get(HOSTAPD_PROP_NAME, supp_status, NULL)
+-+        && strcmp(supp_status, "stopped") == 0) {
+-+        return 0;
+-+    }
+-+
+-+    property_set("ctl.stop", HOSTAPD_NAME);
+-+    sched_yield();
+-+
+-+    while (count-- > 0) {
+-+        if (property_get(HOSTAPD_PROP_NAME, supp_status, NULL)) {
+-+            if (strcmp(supp_status, "stopped") == 0)
+-+                return 0;
+-+        }
+-+        usleep(100000);
+-+    }
+-+    return -1;
+-+}
+-+
+-+int wifi_connect_to_hostapd()
+-+{
+-+    char ifname[256];
+-+    char supp_status[PROPERTY_VALUE_MAX] = {'\0'};
+-+    int connretry = 15; /* 1500 ms */
+-+
+-+    /* Make sure hostapd is running */
+-+    if (!property_get(HOSTAPD_PROP_NAME, supp_status, NULL)
+-+            || strcmp(supp_status, "running") != 0) {
+-+        ALOGE("Supplicant not running, cannot connect");
+-+        return -1;
+-+    }
+-+
+-+    strcpy(iface, "eth0");
+-+    snprintf(ifname, sizeof(ifname), "%s/%s", IFACE_DIR, iface);
+-+    ALOGD("ifname = %s\n", ifname);
+-+
+-+    { /* check iface file is ready */
+-+        int cnt = 160; /* 8 seconds (160*50)*/
+-+        sched_yield();
+-+        while ( access(ifname, F_OK|W_OK)!=0 && cnt-- > 0) {
+-+            usleep(50000);
+-+        }
+-+        if (access(ifname, F_OK|W_OK)==0) {
+-+            snprintf(ifname, sizeof(ifname), "%s/%s", IFACE_DIR, iface);
+-+            ALOGD("ifname %s is ready to read/write cnt=%d\n", ifname, cnt);
+-+        } else {
+-+            strlcpy(ifname, iface, sizeof(ifname));
+-+            ALOGD("ifname %s is not ready, cnt=%d\n", ifname, cnt);
+-+        }
+-+    }
+-+
+-+    while (--connretry && (ctrl_conn = wpa_ctrl_open(ifname)) == NULL) {
+-+        usleep(100000);
+-+    }
+-+
+-+    if (ctrl_conn == NULL) {
+-+        ALOGE("Unable to open connection to hostapd on \"%s\": %s",
+-+             ifname, strerror(errno));
+-+        return -1;
+-+    }
+-+
+-+    if (wpa_ctrl_attach(ctrl_conn) != 0) {
+-+        wpa_ctrl_close(ctrl_conn);
+-+        ctrl_conn = NULL;
+-+        return -1;
+-+    }
+-+    return 0;
+-+}
+-+
+-+void wifi_close_hostapd_connection()
+-+{
+-+    if (ctrl_conn != NULL) {
+-+        wpa_ctrl_close(ctrl_conn);
+-+        ctrl_conn = NULL;
+-+    }
+-+}
+-+
+-+int wifi_load_profile(bool started)
+-+{
+-+    if ((started) && (mProfileValid)) {
+-+        if (ctrl_conn == NULL) {
+-+            return -1;
+-+        }
+-+    }
+-+    return 0;
+-+}
+-+
+-+static int insmod(const char *filename, const char *args)
+-+{
+-+    void *module;
+-+    unsigned int size;
+-+    int ret;
+-+
+-+    module = load_file(filename, &size);
+-+    if (!module)
+-+        return -1;
+-+
+-+    ret = init_module(module, size, args);
+-+
+-+    free(module);
+-+
+-+    return ret;
+-+}
+-+
+-+static int rmmod(const char *modname)
+-+{
+-+    int ret = -1;
+-+    int maxtry = 10;
+-+
+-+    while (maxtry-- > 0) {
+-+        ret = delete_module(modname, O_NONBLOCK | O_EXCL);
+-+        if (ret < 0 && errno == EAGAIN)
+-+            usleep(500000);
+-+        else
+-+            break;
+-+    }
+-+
+-+    if (ret != 0)
+-+        ALOGD("Unable to unload driver module \"%s\": %s\n",
+-+                modname, strerror(errno));
+-+    return ret;
+-+}
+-+
+-+SoftapController::SoftapController(SocketListener *sl)
+-+    : mPid(0) {
+-+    mSpsl = sl;
+-+    memset(mIface, 0, sizeof(mIface));
+-+    mProfileValid = 0;
+-+    ctrl_conn = NULL;
+-+}
+-+
+-+SoftapController::~SoftapController() {
+-+}
+-+
+-+#if 0
+-+int SoftapController::getPrivFuncNum(char *iface, const char *fname) {
+-+    struct iwreq wrq;
+-+    struct iw_priv_args *priv_ptr;
+-+    int i, ret;
+-+
+-+    strncpy(wrq.ifr_name, iface, sizeof(wrq.ifr_name));
+-+    wrq.u.data.pointer = mBuf;
+-+    wrq.u.data.length = sizeof(mBuf) / sizeof(struct iw_priv_args);
+-+    wrq.u.data.flags = 0;
+-+    if ((ret = ioctl(mSock, SIOCGIWPRIV, &wrq)) < 0) {
+-+        ALOGE("SIOCGIPRIV failed: %d", ret);
+-+        return ret;
+-+    }
+-+    priv_ptr = (struct iw_priv_args *)wrq.u.data.pointer;
+-+    for(i=0;(i < wrq.u.data.length);i++) {
+-+        if (strcmp(priv_ptr[i].name, fname) == 0)
+-+            return priv_ptr[i].cmd;
+-+    }
+-+    return -1;
+-+}
+-+#endif
+-+
+-+int SoftapController::startDriver(const char *iface) {
+-+    struct iwreq wrq;
+-+    int fnum, ret;
+-+
+-+    ALOGD("startDriver()");
+-+
+-+    if (!iface || (iface[0] == '\0')) {
+-+        ALOGD("Softap driver start - wrong interface");
+-+        iface = mIface;
+-+    }
+-+
+-+#ifdef WIFI_MODULE_PATH
+-+    rmmod("ar6000");
+-+#ifdef WIFI_DRIVER_MODULE_AP_ARG
+-+    ret = insmod(WIFI_MODULE_PATH, DRIVER_MODULE_AP_ARG);
+-+#else
+-+    ret = insmod(WIFI_MODULE_PATH, "");
+-+#endif
+-+    sleep(1);
+-+#else
+-+    set_wifi_power(0);
+-+    {
+-+        int fd = -1;
+-+        char buffer;
+-+
+-+        fd = open("/sys/module/ar6000/parameters/ifname", O_RDWR);
+-+        if (fd < 0) {
+-+            ALOGE("failed to open interface name");
+-+            ret = -1;
+-+        }
+-+        if (read(fd, &buffer, 1) != 1) {
+-+            ALOGE("failed to get interface name");
+-+            ret = -1;
+-+        }
+-+        if (buffer != 'a' && write(fd, "eth0", 6) > 0) {
+-+            ALOGD("interface renamed for AP mode");
+-+            usleep(500000); /* Give it a while after a name change... */
+-+            ret = set_wifi_power(1);
+-+        } else if (buffer == 'a') {
+-+            ALOGD("interface already named for AP mode");
+-+            ret = 0;
+-+        } else {
+-+            ALOGE("failed to change interface name - %c",buffer);
+-+            ret = -2;
+-+        }
+-+        close(fd);
+-+    }
+-+#endif
+-+
+-+    if (ret) {
+-+        ALOGE("Softap driver start failed");
+-+        return -1;
+-+    }
+-+
+-+    /* Before starting the daemon, make sure its config file exists */
+-+    ret =ensure_config_file_exists();
+-+    if (ret < 0) {
+-+        ALOGE("Softap driver start - configuration file missing");
+-+        return -1;
+-+    }
+-+    /* Indicate interface down */
+-+
+-+    ALOGD("Softap driver start: %d", ret);
+-+    return ret;
+-+}
+-+
+-+int SoftapController::stopDriver(const char *iface) {
+-+    struct iwreq wrq;
+-+    int fnum, ret;
+-+
+-+    ALOGD("stopDriver()");
+-+
+-+    ALOGE("softapcontroller->stopDriver");
+-+    if (!iface || (iface[0] == '\0')) {
+-+        ALOGD("Softap driver stop - wrong interface");
+-+        iface = mIface;
+-+    }
+-+    ret = 0;
+-+#ifdef WIFI_MODULE_PATH
+-+    rmmod("ar6000");
+-+    ret = insmod(WIFI_MODULE_PATH, "");
+-+    sleep(1);
+-+#else
+-+    ret = set_wifi_power(0);
+-+    if (!ret) {
+-+        int fd = -1;
+-+        char buffer;
+-+
+-+        fd = open("/sys/module/ar6000/parameters/ifname", O_RDWR);
+-+        if (fd < 0) {
+-+            ALOGE("failed to open interface name");
+-+            ret = -1;
+-+        }
+-+        if (read(fd, &buffer, 1) != 1) {
+-+            ALOGE("failed to get interface name");
+-+            ret = -1;
+-+        }
+-+        if (buffer != 'w' && write(fd, "wlan0", 5) > 0) {
+-+            ALOGD("interface renamed for STA mode");
+-+            usleep(500000); /* Give it a while after a name change... */
+-+            ret = 0;
+-+        } else if (buffer == 'w') {
+-+            ALOGD("interface already named for STA mode");
+-+            ret = 0;
+-+        } else {
+-+            ALOGE("failed to change interface name - %c",buffer);
+-+            ret = -2;
+-+        }
+-+        close(fd);
+-+    }
+-+#endif
+-+
+-+    ALOGD("Softap driver stop: %d", ret);
+-+    return ret;
+-+}
+-+
+-+int SoftapController::startSoftap() {
+-+    struct iwreq wrq;
+-+    pid_t pid = 1;
+-+    int fnum, ret;
+-+
+-+    ALOGD("startSoftap()");
+-+
+-+    if (mPid) {
+-+        ALOGE("SoftAP is already running");
+-+        return ResponseCode::SoftapStatusResult;
+-+    }
+-+
+-+    if (!mPid) {
+-+        ALOGW("Softap driver not started - loading now");
+-+        startDriver("eth0");
+-+    }
+-+#if 0
+-+   if ((pid = fork()) < 0) {
+-+        ALOGE("fork failed (%s)", strerror(errno));
+-+        return -1;
+-+    }
+-+#endif
+-+    /* system("iwpriv wl0.1 AP_BSS_START"); */
+-+    if (!pid) {
+-+        /* start hostapd */
+-+        return ResponseCode::ServiceStartFailed;
+-+    } else {
+-+        ifc_init();
+-+        ifc_up("eth0");
+-+        sleep(1); /* Give the driver time to settle... */
+-+
+-+        ret = wifi_start_hostapd();
+-+        if (ret < 0) {
+-+            ALOGE("Softap startap - starting hostapd fails");
+-+            stopDriver("eth0");
+-+            return ResponseCode::ServiceStartFailed;
+-+        }
+-+
+-+        sched_yield();
+-+        usleep(100000);
+-+
+-+        ret = wifi_connect_to_hostapd();
+-+        if (ret < 0) {
+-+            ALOGE("Softap startap - connect to hostapd fails");
+-+            return ResponseCode::ServiceStartFailed;
+-+        }
+-+
+-+        /* Indicate interface up */
+-+
+-+        ret = wifi_load_profile(true);
+-+        if (ret < 0) {
+-+            ALOGE("Softap startap - load new configuration fails");
+-+            return ResponseCode::ServiceStartFailed;
+-+        }
+-+        if (ret) {
+-+            ALOGE("Softap startap - failed: %d", ret);
+-+        }
+-+        else {
+-+           mPid = pid;
+-+           ALOGD("Softap startap - Ok");
+-+           usleep(AP_BSS_START_DELAY);
+-+        }
+-+    }
+-+
+-+    return ResponseCode::SoftapStatusResult;
+-+}
+-+
+-+int SoftapController::stopSoftap() {
+-+    struct iwreq wrq;
+-+    int fnum, ret;
+-+
+-+    ALOGD("stopSoftap()");
+-+
+-+    if (mPid == 0) {
+-+        ALOGE("SoftAP is not running");
+-+        return ResponseCode::SoftapStatusResult;
+-+    }
+-+    wifi_close_hostapd_connection();
+-+    ret = wifi_stop_hostapd();
+-+    mPid = 0;
+-+    ALOGD("Softap service stopped: %d", ret);
+-+
+-+#ifndef WIFI_MODULE_PATH
+-+    set_wifi_power(0);
+-+    {
+-+        int fd = -1;
+-+        char buffer;
+-+
+-+        fd = open("/sys/module/ar6000/parameters/ifname", O_RDWR);
+-+        if (fd < 0) {
+-+            ALOGE("failed to open interface name");
+-+            ret = -1;
+-+        }
+-+        if (read(fd, &buffer, 1) != 1) {
+-+            ALOGE("failed to get interface name");
+-+            ret = -1;
+-+        }
+-+        if (buffer != 'w' && write(fd, "wlan0", 5) > 0) {
+-+            ALOGD("interface renamed for STA mode");
+-+            usleep(500000); /* Give it a while after a name change... */
+-+            ret = 0;
+-+        } else if (buffer == 'w') {
+-+            ALOGD("interface already named for STA mode");
+-+            ret = 0;
+-+        } else {
+-+            ALOGE("failed to change interface name - %c",buffer);
+-+            ret = -2;
+-+        }
+-+        close(fd);
+-+    }
+-+#endif
+-+    usleep(AP_BSS_STOP_DELAY);
+-+    return ResponseCode::SoftapStatusResult;
+-+}
+-+
+-+bool SoftapController::isSoftapStarted() {
+-+    return (mPid != 0);
+-+}
+-+
+-+/*
+-+ * Arguments:
+-+ *	argv[2] - wlan interface
+-+ *	argv[3] - SSID
+-+ *	argv[4] - Broadcast/Hidden
+-+ *	argv[5] - Channel
+-+ *	argv[6] - Security
+-+ *	argv[7] - Key
+-+ */
+-+int SoftapController::setSoftap(int argc, char *argv[]) {
+-+    unsigned char psk[SHA256_DIGEST_LENGTH];
+-+    char psk_str[2*SHA256_DIGEST_LENGTH+1];
+-+    struct iwreq wrq;
+-+    int fnum, ret, i = 0;
+-+    char *ssid;
+-+    int fd;
+-+    char buf[80];
+-+    int len;
+-+
+-+    ALOGD("setSoftap()");
+-+
+-+    if (argc < 4) {
+-+        ALOGE("Softap set - missing arguments");
+-+        return ResponseCode::CommandSyntaxError;
+-+    }
+-+
+-+    fd = open(HOSTAPD_CONFIG_FILE, O_CREAT|O_WRONLY|O_TRUNC, 0660);
+-+    if (fd < 0) {
+-+        ALOGE("Cannot create \"%s\": %s", HOSTAPD_CONFIG_FILE, strerror(errno));
+-+        return ResponseCode::OperationFailed;
+-+    }
+-+    if (chown(HOSTAPD_CONFIG_FILE, AID_SYSTEM, AID_WIFI) < 0) {
+-+        ALOGE("Error changing group ownership of %s to %d: %s",
+-+            HOSTAPD_CONFIG_FILE, AID_WIFI, strerror(errno));
+-+        return ResponseCode::OperationFailed;
+-+    }
+-+    if (chmod(HOSTAPD_CONFIG_FILE, 0660) < 0) {
+-+        ALOGE("Error changing permission of %s to %d: %s",
+-+            HOSTAPD_CONFIG_FILE, AID_WIFI, strerror(errno));
+-+        return ResponseCode::OperationFailed;
+-+    }
+-+
+-+    len = snprintf(buf, sizeof(buf), "interface=eth0\n");
+-+    write(fd, buf, len);
+-+    len = snprintf(buf, sizeof(buf), "ctrl_interface=%s\n",IFACE_DIR);
+-+    write(fd, buf, len);
+-+    if (argc > 3) {
+-+        len = snprintf(buf, sizeof(buf), "ssid=%s\n",argv[3]);
+-+    } else {
+-+        len = snprintf(buf, sizeof(buf), "ssid=AndroidAP\n");
+-+    }
+-+    /* set open auth */
+-+    write(fd, buf, len);
+-+    len = snprintf(buf, sizeof(buf), "auth_algs=1\n");
+-+    write(fd, buf, len);
+-+    len = snprintf(buf, sizeof(buf), "max_num_sta=%d\n",WIFI_DEFAULT_MAX_STA);
+-+    write(fd, buf, len);
+-+    len = snprintf(buf, sizeof(buf), "beacon_int=%d\n",WIFI_DEFAULT_BI);
+-+    write(fd, buf, len);
+-+    len = snprintf(buf, sizeof(buf), "dtim_period=%d\n",WIFI_DEFAULT_DTIM);
+-+    write(fd, buf, len);
+-+    if (argc > 4) {
+-+        if (strncmp(argv[6], "wpa2-psk", 8) == 0) {
+-+            len = snprintf(buf, sizeof(buf), "wpa=2\n");
+-+            write(fd, buf, len);
+-+            len = snprintf(buf, sizeof(buf), "wpa_key_mgmt=WPA-PSK\n");
+-+            write(fd, buf, len);
+-+            len = snprintf(buf, sizeof(buf), "wpa_pairwise=CCMP\n");
+-+            write(fd, buf, len);
+-+            if (argc > 5) {
+-+                len = snprintf(buf, sizeof(buf), "wpa_passphrase=%s\n",argv[7]);
+-+                write(fd, buf, len);
+-+            } else {
+-+                len = snprintf(buf, sizeof(buf), "wpa_passphrase=12345678\n");
+-+                write(fd, buf, len);
+-+            }
+-+        }
+-+    }
+-+    if (argc > 6) {
+-+        len = snprintf(buf, sizeof(buf), "channel=%s\n",argv[5]);
+-+        write(fd, buf, len);
+-+    } else {
+-+        len = snprintf(buf, sizeof(buf), "channel=%d\n",WIFI_DEFAULT_CHANNEL);
+-+        write(fd, buf, len);
+-+    }
+-+        len = snprintf(buf, sizeof(buf), "driver=nl80211\n");
+-+        write(fd, buf, len);
+-+
+-+        len = snprintf(buf, sizeof(buf), "hw_mode=g\n");
+-+        write(fd, buf, len);
+-+
+-+    /*if (argc > 7) {
+-+        len = snprintf(buf, sizeof(buf), "preamble=%s\n",argv[7]);
+-+        write(fd, buf, len);
+-+    } else {
+-+        len = snprintf(buf, sizeof(buf), "preamble=%d\n",WIFI_DEFAULT_PREAMBLE);
+-+        write(fd, buf, len);
+-+    }*/
+-+    mProfileValid = 1;
+-+
+-+    close(fd);
+-+
+-+    ret = wifi_load_profile(isSoftapStarted());
+-+    if (ret < 0) {
+-+        ALOGE("Softap set - load new configuration fails");
+-+        return ResponseCode::OperationFailed;
+-+    }
+-+    if (ret) {
+-+        ALOGE("Softap set - failed: %d", ret);
+-+        return ResponseCode::OperationFailed;
+-+    }
+-+
+-+    ALOGD("Softap set - Ok");
+-+    usleep(AP_SET_CFG_DELAY);
+-+    return ResponseCode::SoftapStatusResult;
+-+}
+-+
+-+/*
+-+ * Arguments:
+-+ *	argv[2] - interface name
+-+ *	argv[3] - AP or STA
+-+ */
+-+int SoftapController::fwReloadSoftap(int argc, char *argv[])
+-+{
+-+    struct iwreq wrq;
+-+    int fnum, i = 0;
+-+    char *iface;
+-+
+-+    ALOGD("fwReloadSoftap()");
+-+
+-+    if (argc < 4) {
+-+        ALOGE("Softap fwreload - missing arguments");
+-+        return ResponseCode::CommandSyntaxError;
+-+    }
+-+    ALOGD("Softap fwReload - Ok");
+-+    return ResponseCode::SoftapStatusResult;
+-+} 
+--- 
+-2.2.1
+-
+diff --git a/patches/system_vold/0001-vold-switchable-pair.patch b/patches/system_vold/0001-vold-switchable-pair.patch
+deleted file mode 100644
+index 5160726..0000000
+--- a/patches/system_vold/0001-vold-switchable-pair.patch
++++ /dev/null
+@@ -1,123 +0,0 @@
+-From e63a1f19852cd98f531794ffced7cf607248813a Mon Sep 17 00:00:00 2001
+-From: Kyle Harrison <khwebmail@gmail.com>
+-Date: Sun, 23 Nov 2014 23:12:47 +0000
+-Subject: [PATCH] vold: Allow pre-configured device pairs to switch mountpoints
+-
+-The use-case for this are devices with internal extended storage
+-(pseudo-SDCard emmc) and an actual microSD card reader.
+-In CM, we choose to use the microSD as primary storage, and leave
+-the internal partition mostly unused; some users usually come up with
+-imaginative and data-destroying ways of working around that.
+-
+-This allows us to specify a pair of mountpoints which can be
+-switched from a user preference. For this vold.fstab:
+-
+------
+-dev_mount sdcard /mnt/sdcard ...<path-to-microSD-sysfs>
+-dev_mount emmc /mnt/emmc ...<path-to-emmc-partition>
+------
+-
+-We can add to build.prop:
+-"ro.vold.switchablepair=/mnt/sdcard,/mnt/emmc"
+-
+-A persistent toggle (persist.sys.vold.switchexternal), controllable
+-through CMParts, can be presented to the user to allow choosing
+-something other than our default as primary storage.
+-
+-Updated to 4.4 by @Dazzozo.
+-
+-Change-Id: I9559fa442c833e3168287d820b7b8347736abb15
+-
+-Vold: Allow Settings to determine if a switchable pair exists (1/2)
+-
+-This will eliminate the need for pre-configured device pairs listed
+-in the build.prop, and display the setting if a pair exists.
+-This exapnds on commit dc8d157d73fb88ee33b38e724a8aabe7d5e53eee
+-
+-Change-Id: I5f15a711b5ceabddaf842c252d890545f40b4786
+----
+- DirectVolume.cpp | 38 ++++++++++++++++++++++++++++++++++++++
+- DirectVolume.h   |  4 ++--
+- 2 files changed, 40 insertions(+), 2 deletions(-)
+-
+-diff --git a/DirectVolume.cpp b/DirectVolume.cpp
+-index a869460..49f0052 100644
+---- a/DirectVolume.cpp
+-+++ b/DirectVolume.cpp
+-@@ -25,6 +25,7 @@
+- #define LOG_TAG "DirectVolume"
+- 
+- #include <cutils/log.h>
+-+#include <cutils/properties.h>
+- #include <sysutils/NetlinkEvent.h>
+- 
+- #include "DirectVolume.h"
+-@@ -72,6 +73,7 @@ bool PathInfo::match(const char *path)
+- 
+- DirectVolume::DirectVolume(VolumeManager *vm, const fstab_rec* rec, int flags) :
+-         Volume(vm, rec, flags) {
+-+    char switchable[PROPERTY_VALUE_MAX];
+-     mPaths = new PathCollection();
+-     for (int i = 0; i < MAX_PARTITIONS; i++)
+-         mPartMinors[i] = -1;
+-@@ -98,6 +100,42 @@ DirectVolume::DirectVolume(VolumeManager *vm, const fstab_rec* rec, int flags) :
+-     mMountpoint = strdup(mount);
+-     snprintf(mount, PATH_MAX, "%s/%s", Volume::FUSE_DIR, rec->label);
+-     mFuseMountpoint = strdup(mount);
+-+
+-+    property_get("persist.sys.vold.switchexternal", switchable, "0");
+-+    if (!strcmp(switchable,"1")) {
+-+        char *first, *second = NULL;
+-+        char label[PATH_MAX];
+-+        const char *delim = ",";
+-+        int lblidx = strlen(Volume::FUSE_DIR) + 1;
+-+        bool swap = true;
+-+
+-+        property_get("persist.sys.vold.switchablepair", switchable, "");
+-+
+-+        if (!(first = strtok(switchable, delim))) {
+-+            SLOGE("Mount switch requested, but no switchable mountpoints found");
+-+            swap = false;
+-+        } else if (!(second = strtok(NULL, delim))) {
+-+            SLOGE("Mount switch requested, but bad switchable mountpoints found");
+-+            swap = false;
+-+        }
+-+
+-+        if (swap) {
+-+            free(mMountpoint);
+-+            free(mFuseMountpoint);
+-+
+-+            if (!strcmp(mount,first)) {
+-+                mFuseMountpoint = strdup(second);
+-+                strcpy(label, second+lblidx);
+-+                snprintf(second, PATH_MAX, "%s/%s", Volume::MEDIA_DIR, label);
+-+                mMountpoint = strdup(second);
+-+            } else if (!strcmp(mount,second)) {
+-+                mFuseMountpoint = strdup(first);
+-+                strcpy(label, first+lblidx);
+-+                snprintf(first, PATH_MAX, "%s/%s", Volume::MEDIA_DIR, label);
+-+                mMountpoint = strdup(first);
+-+            }
+-+        }
+-+    }
+- #endif
+- 
+-     setState(Volume::State_NoMedia);
+-diff --git a/DirectVolume.h b/DirectVolume.h
+-index 7ab06c0..5ff575b 100644
+---- a/DirectVolume.h
+-+++ b/DirectVolume.h
+-@@ -43,8 +43,8 @@ class DirectVolume : public Volume {
+- public:
+-     static const int MAX_PARTITIONS = VOLD_MAX_PARTITIONS;
+- protected:
+--    const char* mMountpoint;
+--    const char* mFuseMountpoint;
+-+    char* mMountpoint;
+-+    char* mFuseMountpoint;
+- 
+-     PathCollection *mPaths;
+-     int            mDiskMajor;
+--- 
+-2.1.3
+-
+diff --git a/patches/vendor_slim/0001-Cyanogen-fix-for-deep-sleep-and-latest-play-services.patch b/patches/vendor_slim/0001-Cyanogen-fix-for-deep-sleep-and-latest-play-services.patch
+deleted file mode 100644
+index 314a874..0000000
+--- a/patches/vendor_slim/0001-Cyanogen-fix-for-deep-sleep-and-latest-play-services.patch
++++ /dev/null
+@@ -1,47 +0,0 @@
+-From 0409eead798b28ffad9c9a8a9708e8b2dd02cb93 Mon Sep 17 00:00:00 2001
+-From: Steve Kondik <steve@cyngn.com>
+-Date: Fri, 5 Dec 2014 00:28:43 -0800
+-Subject: [PATCH] Cyanogen fix for deep sleep and latest play services [2/2]
+-
+-cm: Reenable disabledComponents list
+-
+-enable service but lock its receivers [2/2]
+-
+-Change-Id: Ic034b3f38afc463312e9ca2f827d48b6d9617004
+----
+- .../frameworks/base/core/res/res/values/config.xml       | 16 +++++++++++++---
+- 1 file changed, 13 insertions(+), 3 deletions(-)
+-
+-diff --git a/overlay/common/frameworks/base/core/res/res/values/config.xml b/overlay/common/frameworks/base/core/res/res/values/config.xml
+-index bd10939..67f2ed0 100644
+---- a/overlay/common/frameworks/base/core/res/res/values/config.xml
+-+++ b/overlay/common/frameworks/base/core/res/res/values/config.xml
+-@@ -23,12 +23,22 @@
+-         <item>com.google.android.gms</item>
+-     </string-array>
+- 
+--    <!-- Disable stock OTA components if installed
+-+    <!-- Disable stock OTA components if installed -->
+-     <string-array name="config_disabledComponents" translatable="false">
+-         <item>com.google.android.gsf/com.google.android.gsf.update.SystemUpdateActivity</item>
+--        <item>com.google.android.gsf/com.google.android.gsf.update.SystemUpdateService</item>
+-         <item>com.google.android.gsf/com.google.android.gsf.update.SystemUpdateService$Receiver</item>
+--    </string-array>-->
+-+        <item>com.google.android.gsf/com.google.android.gsf.update.SystemUpdateService$SecretCodeReceiver</item>
+-+        <item>com.google.android.gms/com.google.android.gms.update.SystemUpdateActivity</item>
+-+        <item>com.google.android.gms/com.google.android.gms.update.SystemUpdateService$Receiver</item>
+-+        <item>com.google.android.gms/com.google.android.gms.update.SystemUpdateService$ActiveReceiver</item>
+-+        <item>com.google.android.gms/com.google.android.gms.update.SystemUpdateService$SecretCodeReceiver</item>
+-+    </string-array>
+-+    
+-+    <!-- Force enabling of some services that could have been previously disabled -->
+-+    <string-array name="config_forceEnabledComponents" translatable="false">
+-+        <item>com.google.android.gsf/com.google.android.gsf.update.SystemUpdateService</item>
+-+        <item>com.google.android.gms/com.google.android.gms.update.SystemUpdateService</item>
+-+    </string-array>
+- 
+-     <string name="config_mms_user_agent">"Android-Mms/2.0"</string>
+-     <string name="config_mms_user_agent_profile_url">http://www.google.com/oha/rdf/ua-profile-kila.xml</string>
+--- 
+-2.4.2
+-
+
+project device/huawei/u8833/
+diff --git a/BoardConfig.mk b/BoardConfig.mk
+index eb70089..bf413a1 100644
+--- a/BoardConfig.mk
++++ b/BoardConfig.mk
+@@ -13,7 +13,12 @@
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+ #
+-
++PRODUCT_PREBUILT_WEBVIEWCHROMIUM=yes
++ANDROID_COMPILE_WITH_JACK := false
++WITH_SU=true
++FUCK_XDA=true
++DISABLE_DEXPREOPT=true
++WITH_DEXPREOPT=false
+ # Inherit from the proprietary version
+ -include vendor/huawei/u8833/BoardConfigVendor.mk
+ 
+@@ -24,7 +29,9 @@ TARGET_BOOTLOADER_BOARD_NAME := u8833
+ TARGET_OTA_ASSERT_DEVICE := u8833,hwu8833,u8951,hwu8951
+ 
+ # Audio
+-TARGET_HAS_QACT := true
++TARGET_HAS_QACT := false
++BOARD_USES_LEGACY_ALSA_AUDIO := true
++TARGET_QCOM_AUDIO_VARIANT := caf
+ 
+ # Bluetooth
+ BOARD_BLUETOOTH_BDROID_BUILDCFG_INCLUDE_DIR := device/huawei/u8833/bluetooth
+
+project frameworks/base/
+diff --git a/data/etc/Android.mk b/data/etc/Android.mk
+index 134ac0c..7947446 100644
+--- a/data/etc/Android.mk
++++ b/data/etc/Android.mk
+@@ -32,16 +32,17 @@ LOCAL_SRC_FILES := $(LOCAL_MODULE)
+ include $(BUILD_PREBUILT)
+ 
+ ########################
+-#include $(CLEAR_VARS)
++include $(CLEAR_VARS)
+ 
+-#LOCAL_MODULE := required_hardware.xml
++LOCAL_MODULE := android.hardware.usb.host.xml
+ 
+-#LOCAL_MODULE_CLASS := ETC
++LOCAL_MODULE_CLASS := ETC
+ 
+ # This will install the file in /system/etc/permissions
+ #
+-#LOCAL_MODULE_PATH := $(TARGET_OUT_ETC)/permissions
++LOCAL_MODULE_PATH := $(TARGET_OUT_ETC)/permissions
+ 
+-#LOCAL_SRC_FILES := $(LOCAL_MODULE)
++LOCAL_SRC_FILES := $(LOCAL_MODULE)
++
++include $(BUILD_PREBUILT)
+ 
+-#include $(BUILD_PREBUILT)
+diff --git a/data/etc/platform.xml b/data/etc/platform.xml
+index 0ca6b83..540e6ea 100644
+--- a/data/etc/platform.xml
++++ b/data/etc/platform.xml
+@@ -58,9 +58,10 @@
+         <group gid="log" />
+     </permission>
+ 
+-    <permission name="android.permission.READ_EXTERNAL_STORAGE" >
+-        <group gid="sdcard_r" />
++    <permission name="android.permission.WRITE_MEDIA_STORAGE" >
+         <group gid="media_rw" />
++		<group gid="sdcard_r" />
++        <group gid="sdcard_rw" />
+     </permission>
+ 
+     <permission name="android.permission.WRITE_EXTERNAL_STORAGE" >
+diff --git a/packages/SystemUI/proguard.flags b/packages/SystemUI/proguard.flags
+index 47e24e8..eda563d 100644
+--- a/packages/SystemUI/proguard.flags
++++ b/packages/SystemUI/proguard.flags
+@@ -13,3 +13,8 @@
+ -keep class com.android.systemui.statusbar.phone.PhoneStatusBar
+ -keep class com.android.systemui.statusbar.tv.TvStatusBar
+ -keep class com.android.systemui.recents.*
++
++-dontwarn android.support.v7.widget.CardView
++-dontwarn android.support.v7.widget.RoundRectDrawableWithShadow
++-dontwarn android.support.v7.cardview
++
+
+project packages/apps/Settings/
+diff --git a/res/values/custom_strings.xml b/res/values/custom_strings.xml
+index e3b10eb..14fa899 100644
+--- a/res/values/custom_strings.xml
++++ b/res/values/custom_strings.xml
+@@ -39,6 +39,13 @@
+     <string name="advanced_options_title">Advanced options</string>
+     <string name="advanced_category_title">Advanced</string>
+ 
++    <!-- Vold Switchable Pair -->
++    <string name="storage_switch_title">Use external SD as primary</string>
++    <string name="storage_switch_summary_off">Using expanded internal storage for apps and media</string>
++    <string name="storage_switch_summary_on">Using SD Card for apps and media</string>
++    <string name="reboot_prompt_title">Reboot required</string>
++    <string name="reboot_prompt_message">In order to apply the changed configuration, a reboot is required.\n\nDo you want to reboot now?</string>
++
+     <!-- General strings -->
+     <string name="ok">OK</string>
+     <string name="reset">Reset</string>
+diff --git a/res/xml/device_info_memory.xml b/res/xml/device_info_memory.xml
+index 36da89e..26d464f 100644
+--- a/res/xml/device_info_memory.xml
++++ b/res/xml/device_info_memory.xml
+@@ -19,6 +19,12 @@
+         android:title="@string/storage_settings"
+         settings:keywords="@string/keywords_storage">
+ 
++    <SwitchPreference
++        android:key="key_switch_storage"
++        android:title="@string/storage_switch_title"
++        android:summaryOn="@string/storage_switch_summary_on"
++        android:summaryOff="@string/storage_switch_summary_off" />
++
+ <!-- Preference categories are dynamically created based on the list of available storage volumes -->
+ 
+     <PreferenceCategory
+diff --git a/src/com/android/settings/deviceinfo/Memory.java b/src/com/android/settings/deviceinfo/Memory.java
+index 311b00c..735b73d 100644
+--- a/src/com/android/settings/deviceinfo/Memory.java
++++ b/src/com/android/settings/deviceinfo/Memory.java
+@@ -52,7 +52,10 @@ import android.view.Menu;
+ import android.view.MenuInflater;
+ import android.view.MenuItem;
+ import android.widget.Toast;
+-
++import android.os.PowerManager;
++import android.os.SystemProperties;
++import android.preference.SwitchPreference;
++import android.text.TextUtils;
+ import com.android.settings.MediaFormat;
+ import com.android.settings.R;
+ import com.android.settings.SettingsActivity;
+@@ -97,6 +100,10 @@ public class Memory extends SettingsPreferenceFragment
+     private UsbManager mUsbManager;
+ 
+     private ArrayList<StorageVolumePreferenceCategory> mCategories = Lists.newArrayList();
++    private static final String KEY_SWITCH_STORAGE = "key_switch_storage";
++    private static final String VOLD_SWITCH_PERSIST_PROP = "persist.sys.vold.switchexternal";
++    private static final String VOLD_SWITCHABLEPAIR_PROP = "persist.sys.vold.switchablepair";
++    private SwitchPreference mSwitchStoragePref;
+ 
+     @Override
+     public void onCreate(Bundle icicle) {
+@@ -110,6 +117,26 @@ public class Memory extends SettingsPreferenceFragment
+         mStorageManager.registerListener(mStorageListener);
+ 
+         addPreferencesFromResource(R.xml.device_info_memory);
++        String voldswitch = SystemProperties.get(VOLD_SWITCH_PERSIST_PROP, "0");
++        mSwitchStoragePref = (SwitchPreference) findPreference(KEY_SWITCH_STORAGE);
++        mSwitchStoragePref.setChecked("1".equals(voldswitch));
++        if (!Environment.isExternalStorageEmulated()) {
++            Log.i(TAG, "Checking to see if vold switch is possible on this device.");
++            String PRIMARY_STORAGE = System.getenv("EXTERNAL_STORAGE");
++            String SECONDARY_STORAGE = System.getenv("SECONDARY_STORAGE");
++            if (!TextUtils.isEmpty(PRIMARY_STORAGE) && !TextUtils.isEmpty(SECONDARY_STORAGE)) {
++                SystemProperties.set(VOLD_SWITCHABLEPAIR_PROP, PRIMARY_STORAGE + ',' +
++                       SECONDARY_STORAGE);
++                Log.i(TAG, "Setting persist.sys.vold.switchablepair=" + PRIMARY_STORAGE + ',' +
++                        SECONDARY_STORAGE);
++            } else {
++                Log.i(TAG, "Vold switch not possible on this device.");
++            }
++        }
++
++        if (SystemProperties.get(VOLD_SWITCHABLEPAIR_PROP).equals("")) {
++            removePreference(KEY_SWITCH_STORAGE);
++        }
+ 
+         addCategory(StorageVolumePreferenceCategory.buildForInternal(context));
+ 
+@@ -263,7 +290,13 @@ public class Memory extends SettingsPreferenceFragment
+ 
+     @Override
+     public boolean onPreferenceTreeClick(PreferenceScreen preferenceScreen, Preference preference) {
+-        if (StorageVolumePreferenceCategory.KEY_CACHE.equals(preference.getKey())) {
++        if(preference == mSwitchStoragePref) {
++            Log.d(TAG,"Setting persist.sys.vold.switchexternal to "+(
++                    mSwitchStoragePref.isChecked() ? "1" : "0"));
++            SystemProperties.set(VOLD_SWITCH_PERSIST_PROP,
++                    mSwitchStoragePref.isChecked() ? "1" : "0");
++            showRebootPrompt();
++        } else if (StorageVolumePreferenceCategory.KEY_CACHE.equals(preference.getKey())) {
+             ConfirmClearCacheFragment.show(this);
+             return true;
+         }
+@@ -595,4 +628,21 @@ public class Memory extends SettingsPreferenceFragment
+                 return result;
+             }
+         };
++
++    private void showRebootPrompt() {
++        AlertDialog dialog = new AlertDialog.Builder(getActivity())
++                .setTitle(R.string.reboot_prompt_title)
++                .setMessage(R.string.reboot_prompt_message)
++                .setPositiveButton(R.string.yes, new DialogInterface.OnClickListener() {
++                    @Override
++                    public void onClick(DialogInterface dialog, int which) {
++                        PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
++                        pm.reboot(null);
++                    }
++                })
++                .setNegativeButton(R.string.no, null)
++                .create();
++
++        dialog.show();
++    }
+ }
+
+project vendor/broken/
+diff --git a/vendorsetup.sh b/vendorsetup.sh
+index 04a6995..95d7988 100644
+--- a/vendorsetup.sh
++++ b/vendorsetup.sh
+@@ -48,3 +48,6 @@ add_lunch_combo broken_ville-userdebug
+ add_lunch_combo broken_vs980-userdebug
+ add_lunch_combo broken_vs985-userdebug
+ add_lunch_combo broken_Z00A-userdebug
++add_lunch_combo broken_u8825-userdebug
++add_lunch_combo broken_u8833-userdebug
++add_lunch_combo broken_u8951-userdebug
